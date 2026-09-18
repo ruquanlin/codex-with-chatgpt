@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { EventEmitter } from "node:events";
 import path from "node:path";
-import { startBridge } from "../src/bridge/server.js";
+import { listen, startBridge } from "../src/bridge/server.js";
 import { probeBridge } from "../src/bridge/runtime.js";
 import { makeTmpDir, cleanup, write, isolateStateDir } from "./helpers.js";
 
@@ -51,4 +52,59 @@ describe("port collision handling", () => {
     ).rejects.toThrow(/loopback/);
     cleanup(root);
   });
+
+  it.each(["EADDRINUSE", "EPERM"] as const)(
+    "falls back to an ephemeral port when the preferred port returns %s",
+    async (code) => {
+      const attempts: Array<{ port: number; server: FakeServer }> = [];
+      const app = {
+        listen(port: number) {
+          const server = new FakeServer();
+          attempts.push({ port, server });
+          queueMicrotask(() => {
+            if (attempts.length === 1) server.emit("error", Object.assign(new Error(code), { code }));
+            else {
+              server.addressValue = { port: 49123 };
+              server.emit("listening");
+            }
+          });
+          return server;
+        },
+      } as unknown as Parameters<typeof listen>[0];
+
+      const result = await listen(app, "127.0.0.1", 49000);
+
+      expect(result.port).toBe(49123);
+      expect(attempts.map(({ port }) => port)).toEqual([49000, 0]);
+      expect(attempts[0].server.closed).toBe(true);
+      expect(result.server).toBe(attempts[1].server);
+    }
+  );
+
+  it("propagates unexpected listen errors without retrying", async () => {
+    const first = new FakeServer();
+    const app = {
+      listen: () => {
+        queueMicrotask(() => first.emit("error", Object.assign(new Error("boom"), { code: "EACCES" })));
+        return first;
+      },
+    } as unknown as Parameters<typeof listen>[0];
+
+    await expect(listen(app, "127.0.0.1", 49001)).rejects.toThrow("boom");
+    expect(first.closed).toBe(false);
+  });
 });
+
+class FakeServer extends EventEmitter {
+  addressValue: { port: number } | null = null;
+  closed = false;
+
+  address(): { port: number } | null {
+    return this.addressValue;
+  }
+
+  close(): this {
+    this.closed = true;
+    return this;
+  }
+}

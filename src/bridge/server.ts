@@ -56,9 +56,10 @@ export interface Bridge {
 }
 
 /**
- * Listen on the preferred port; on EADDRINUSE fall back to an ephemeral port.
+ * Listen on the preferred port; fall back to an ephemeral port when the
+ * preferred port is unavailable in the current environment.
  */
-function listen(app: express.Express, host: string, preferredPort: number): Promise<{ server: Server; port: number }> {
+export function listen(app: express.Express, host: string, preferredPort: number): Promise<{ server: Server; port: number }> {
   return new Promise((resolve, reject) => {
     const tryListen = (port: number, allowFallback: boolean): void => {
       const server = app.listen(port, host);
@@ -68,7 +69,8 @@ function listen(app: express.Express, host: string, preferredPort: number): Prom
         resolve({ server, port: actual });
       });
       server.once("error", (error: NodeJS.ErrnoException) => {
-        if (error.code === "EADDRINUSE" && allowFallback) {
+        if ((error.code === "EADDRINUSE" || error.code === "EPERM") && allowFallback) {
+          server.close();
           tryListen(0, false);
         } else {
           reject(error);
