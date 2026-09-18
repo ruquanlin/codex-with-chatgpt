@@ -586,12 +586,20 @@ Produce a C2C PLAN message.
    ChatGPT does not micro-manage tool calls).
    Before you start:
    `c2c session set -w <ws> --protocol-state EXECUTING --waiting-for none --next-step "finish PLAN then record"`
-5. Record the execution so ChatGPT can read it via MCP. Metadata always:
+5. Record the execution so ChatGPT can read it via MCP. For validation
+   commands, prefer wrapping the real command so stdout/stderr and the exit
+   code are captured directly:
+   `c2c exec -w <ws> --type test --task c2c_f81a --iteration 1 --changed-files "src/a.ts,src/b.ts" -- pnpm test`
+   Use `--type lint`, `--type build`, or `--type typecheck` for those
+   validation commands. The wrapper exits with the command's real exit code;
+   continue the protocol even when it fails so ChatGPT can inspect the record.
+   If the command was already run by the harness and stdout/stderr were
+   captured separately, record the execution explicitly. Metadata always:
    `c2c record -w <ws> --task c2c_f81a --iteration 1 --changed-files "src/a.ts,src/b.ts" --tests "27 passed" --exit-status ok`
    If this iteration ran a **test / build / lint / typecheck** command, also
    pass that command's output. Write stdout/stderr to a local temp file first,
    then:
-   `c2c record … --command "pnpm test" --output-file <temp> --exit-code <n>`
+   `c2c record … --type test --command "pnpm test" --stdout-file <stdout> --stderr-file <stderr> --exit-code <n>`
    Record both success and failure. Do not record shell history, `.env`,
    keys, or unrelated dumps. Never paste that file (or any log) into ChatGPT.
    If the CLI says the output was not released, still send EXECUTED; ChatGPT

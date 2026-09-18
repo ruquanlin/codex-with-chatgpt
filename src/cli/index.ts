@@ -55,7 +55,7 @@ import {
   type WaitingFor,
 } from "../session/state.js";
 import { appendExecutionRecord } from "../execution/records.js";
-import { saveExecutionOutput } from "../execution/output.js";
+import { saveExecutionOutput, type ExecutionOutputMeta } from "../execution/output.js";
 
 const program = new Command();
 
@@ -109,6 +109,42 @@ function readCappedUtf8(filePath: string, maxBytes: number): string {
   } finally {
     fs.closeSync(fd);
   }
+}
+
+function parseValidationType(value: string): ExecutionOutputMeta["validationType"] {
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "test" ||
+    normalized === "lint" ||
+    normalized === "build" ||
+    normalized === "typecheck" ||
+    normalized === "other"
+  ) {
+    return normalized;
+  }
+  throw new InvalidArgumentError("must be one of test, lint, build, typecheck, other");
+}
+
+function summarizeExit(validationType: ExecutionOutputMeta["validationType"], exitCode: number): string {
+  if (exitCode === 0) return validationType === "test" ? "passed" : `${validationType ?? "command"} passed`;
+  return validationType === "test" ? "failed" : `${validationType ?? "command"} failed`;
+}
+
+function nextRecordedIteration(workspace: Workspace): number {
+  const recordsPath = path.join(getStateDir(), "executions", `${workspace.id}.jsonl`);
+  if (!fs.existsSync(recordsPath)) return 1;
+  const lines = fs.readFileSync(recordsPath, "utf8").trim().split("\n").filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index--) {
+    try {
+      const parsed = JSON.parse(lines[index]) as { iteration?: unknown };
+      if (Number.isInteger(parsed.iteration) && (parsed.iteration as number) >= 0) {
+        return (parsed.iteration as number) + 1;
+      }
+    } catch {
+      // Ignore corrupt legacy lines.
+    }
+  }
+  return 1;
 }
 
 function persistWorkspaceEndpoint(opts: {
@@ -1054,7 +1090,10 @@ program
   .option("--command <text>", "command whose output may be offered to ChatGPT")
   .option("--output <text>", "command output (prefer --output-file for long logs)")
   .option("--output-file <path>", "read command output from a local file")
+  .option("--stdout-file <path>", "read stdout from a local file")
+  .option("--stderr-file <path>", "read stderr from a local file")
   .option("--exit-code <n>", "numeric exit code of that command", parseInteger)
+  .option("--type <type>", "validation type: test, lint, build, typecheck, other", parseValidationType)
   .action(
     (opts: {
       workspace?: string;
@@ -1067,7 +1106,10 @@ program
       command?: string;
       output?: string;
       outputFile?: string;
+      stdoutFile?: string;
+      stderrFile?: string;
       exitCode?: number;
+      type?: ExecutionOutputMeta["validationType"];
     }) => {
       const workspace = new Workspace(resolveWorkspace(opts.workspace));
       const changed = parseChangedFiles(opts.changedFiles);
@@ -1077,13 +1119,18 @@ program
         opts.outputFile !== undefined
           ? readCappedUtf8(path.resolve(opts.outputFile), MAX_RECORD_OUTPUT_READ)
           : opts.output;
-      if (opts.command && rawOutput !== undefined) {
+      const stdout = opts.stdoutFile ? readCappedUtf8(path.resolve(opts.stdoutFile), MAX_RECORD_OUTPUT_READ) : undefined;
+      const stderr = opts.stderrFile ? readCappedUtf8(path.resolve(opts.stderrFile), MAX_RECORD_OUTPUT_READ) : undefined;
+      if (opts.command && (rawOutput !== undefined || stdout !== undefined || stderr !== undefined)) {
         const savedOutput = saveExecutionOutput(workspace.id, {
           command: opts.command,
           raw: rawOutput,
+          stdout,
+          stderr,
           exitCode: opts.exitCode ?? null,
           taskId: opts.task,
           iteration: opts.iteration,
+          validationType: opts.type,
         });
         outputId = savedOutput.id;
         outputAvailable = savedOutput.allowed;
@@ -1092,6 +1139,9 @@ program
         taskId: opts.task,
         iteration: opts.iteration,
         changedFiles: changed,
+        command: opts.command,
+        exitCode: opts.exitCode ?? null,
+        validationType: opts.type,
         tests: opts.tests ?? null,
         exitStatus: opts.exitStatus,
         timestamp: new Date().toISOString(),
@@ -1102,6 +1152,71 @@ program
       if (outputId !== undefined && !outputAvailable) check("已记录执行摘要（输出未对 ChatGPT 开放）");
       else if (outputId !== undefined) check("已记录执行摘要与输出");
       else check("已记录执行摘要");
+    }
+  );
+
+program
+  .command("exec", { hidden: true })
+  .description("Run a validation command and record its real stdout/stderr for MCP read-back")
+  .option("-w, --workspace <path>")
+  .requiredOption("--type <type>", "validation type: test, lint, build, typecheck, other", parseValidationType)
+  .option("--task <id>", "task id to attach to the execution", "codex_validation")
+  .option("--iteration <n>", "non-negative execution iteration; defaults to next recorded iteration", parseNonNegativeInteger)
+  .option("--changed-files <filesOrCount>", "comma-separated files or a count", "0")
+  .argument("<command...>", "command and arguments to execute, for example: pnpm test")
+  .allowUnknownOption(true)
+  .action(
+    (
+      commandArgs: string[],
+      opts: {
+        workspace?: string;
+        type: ExecutionOutputMeta["validationType"];
+        task: string;
+        iteration?: number;
+        changedFiles: string;
+      }
+    ) => {
+      const workspace = new Workspace(resolveWorkspace(opts.workspace));
+      if (commandArgs.length === 0) throw new Error("No command provided.");
+      const [command, ...args] = commandArgs;
+      const display = commandArgs.join(" ");
+      const result = spawnSync(command, args, {
+        cwd: workspace.root,
+        env: process.env,
+        encoding: "utf8",
+        maxBuffer: MAX_RECORD_OUTPUT_READ,
+        shell: false,
+      });
+      const stdout = result.stdout ?? "";
+      const stderr = result.stderr ?? "";
+      if (stdout) process.stdout.write(stdout);
+      if (stderr) process.stderr.write(stderr);
+      const exitCode = result.error ? 1 : (result.status ?? 1);
+      const iteration = opts.iteration ?? nextRecordedIteration(workspace);
+      const savedOutput = saveExecutionOutput(workspace.id, {
+        command: display,
+        stdout,
+        stderr,
+        exitCode,
+        taskId: opts.task,
+        iteration,
+        validationType: opts.type,
+      });
+      appendExecutionRecord(workspace.id, {
+        taskId: opts.task,
+        iteration,
+        changedFiles: parseChangedFiles(opts.changedFiles),
+        command: display,
+        exitCode,
+        validationType: opts.type,
+        tests: summarizeExit(opts.type, exitCode),
+        exitStatus: exitCode === 0 ? "ok" : "failed",
+        timestamp: new Date().toISOString(),
+        notes: result.error ? result.error.message.slice(0, 400) : undefined,
+        outputId: savedOutput.id,
+        outputAvailable: savedOutput.allowed,
+      });
+      process.exit(exitCode);
     }
   );
 

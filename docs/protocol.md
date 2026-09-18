@@ -122,13 +122,18 @@ If status is restricted, ignore it and review from git_diff.
 
 Before sending EXECUTED, Codex records the iteration:
 `c2c record --task c2c_f81a --iteration 1 --changed-files ... --tests ... --exit-status ok`
-and, when a test/build/lint/typecheck was run, `--command` plus `--output-file`.
+and, when a test/build/lint/typecheck was run, `--command` plus captured
+stdout/stderr. Prefer `c2c exec --type <test|lint|build|typecheck> --
+<command>` when Codex is about to run the validation command itself. If a
+harness already ran the command and captured output, submit the same real
+stdout/stderr with `c2c record --type ... --stdout-file ... --stderr-file ...`.
 ChatGPT reads metadata via `execution_summary` / `test_status`. Command output
 is a separate opt-in: `execution_output` (`list` then `read`). Codex nominates
 the log; a **local sanitizer** decides whether ChatGPT may see the body
 (tokens/paths redacted; private keys withheld entirely; size/line caps).
 Restricted items appear in `list` with no body. Old records without output
-stay valid. Never paste logs into the control message.
+stay valid. MCP cannot observe arbitrary terminal processes directly. Never
+paste logs into the control message.
 
 ### DONE / BLOCKED (ChatGPT → Codex)
 

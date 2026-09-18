@@ -170,10 +170,12 @@ Credentials stay in the OS app state directory, not in the project.
 - **Control plane (Computer Use)**: Codex and ChatGPT exchange tiny structured
   `[C2C]` state messages — `INIT → PLAN → EXECUTED → REVIEW → DONE`. No diffs,
   no logs, no file bodies are ever pasted.
-- **Data plane (MCP)**: ChatGPT pulls what it needs itself through 9 read-only
-  tools: `workspace_info`, `list_directory`, `read_file`, `search_workspace`,
-  `git_status`, `git_diff`, `test_status`, `execution_summary`,
-  `execution_output`.
+- **Data plane (MCP)**: ChatGPT pulls what it needs itself through scoped MCP
+  tools. Most are read-only (`workspace_info`, `list_directory`, `read_file`,
+  `search_workspace`, `git_status`, `git_diff`, `test_status`,
+  `execution_summary`, `execution_output`); write-scoped tools are limited to
+  applying patches and running configured package scripts (`apply_patch`,
+  `run_tests`, `build_project`, `run_lint`).
 - **Independent review**: after Codex executes, ChatGPT inspects the actual
   git diff and test records through MCP — it never trusts "all tests passed"
   claims blindly.
@@ -213,7 +215,8 @@ Requirements: Node.js >= 20, git. `cloudflared` for the public connection
 `C2C_TUNNEL_PROTOCOL=http2` and restart the bridge.
 
 Docs: [architecture](docs/architecture.md) · [protocol](docs/protocol.md) ·
-[security](docs/security.md) · [troubleshooting](docs/troubleshooting.md)
+[MCP tools](docs/mcp-tools.md) · [security](docs/security.md) ·
+[troubleshooting](docs/troubleshooting.md) · [v2.0 release notes](docs/release-v2.md)
 
 ## Project layout
 

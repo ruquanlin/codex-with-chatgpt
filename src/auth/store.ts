@@ -6,6 +6,7 @@ import { ensureDir, getStateDir, readJsonIfExists, writeSecureJson } from "../co
 export const SUPPORTED_SCOPES = [
   "workspace.read",
   "workspace.search",
+  "workspace.write",
   "git.read",
   "execution.read",
   "offline_access",
@@ -46,6 +47,7 @@ export interface TokenRecord {
 interface PersistedAuthState {
   clients: ClientRegistration[];
   tokens: TokenRecord[];
+  authCodes?: AuthorizationCodeRecord[];
 }
 
 export type VerifyTokenResult =
@@ -95,9 +97,15 @@ export class AuthStore {
     const data = readJsonIfExists<PersistedAuthState>(this.file);
     if (!data) return;
     const now = Date.now();
+    this.clients.clear();
+    this.tokens.clear();
+    this.authCodes.clear();
     for (const client of data.clients ?? []) this.clients.set(client.clientId, client);
     for (const token of data.tokens ?? []) {
       if (!token.revoked && token.expiresAt > now) this.tokens.set(token.hash, token);
+    }
+    for (const code of data.authCodes ?? []) {
+      if (code.expiresAt > now) this.authCodes.set(code.code, code);
     }
   }
 
@@ -106,6 +114,7 @@ export class AuthStore {
     const state: PersistedAuthState = {
       clients: [...this.clients.values()],
       tokens: [...this.tokens.values()].filter((t) => !t.revoked && t.expiresAt > now),
+      authCodes: [...this.authCodes.values()].filter((code) => code.expiresAt > now),
     };
     writeSecureJson(this.file, state);
   }
@@ -125,6 +134,7 @@ export class AuthStore {
   }
 
   getClient(clientId: string): ClientRegistration | undefined {
+    this.load();
     return this.clients.get(clientId);
   }
 
@@ -150,14 +160,17 @@ export class AuthStore {
       resource: input.resource,
       expiresAt: Date.now() + AUTH_CODE_TTL_MS,
     });
+    this.save();
     return code;
   }
 
   /** One-time consumption of an authorization code. */
   consumeAuthorizationCode(code: string): AuthorizationCodeRecord | null {
+    this.load();
     const record = this.authCodes.get(code);
     if (!record) return null;
     this.authCodes.delete(code);
+    this.save();
     if (Date.now() > record.expiresAt) return null;
     return record;
   }
@@ -210,6 +223,7 @@ export class AuthStore {
   }
 
   verifyAccessToken(token: string): VerifyTokenResult {
+    this.load();
     const record = this.tokens.get(sha256hex(token));
     if (!record) return { ok: false, reason: "unknown" };
     if (record.kind !== "access") return { ok: false, reason: "wrong_kind" };
@@ -223,6 +237,7 @@ export class AuthStore {
     refreshToken: string,
     clientId: string
   ): { ok: true; tokens: ReturnType<AuthStore["issueTokens"]> } | { ok: false; reason: string } {
+    this.load();
     const record = this.tokens.get(sha256hex(refreshToken));
     if (!record || record.kind !== "refresh") return { ok: false, reason: "invalid_grant" };
     if (record.revoked) return { ok: false, reason: "invalid_grant" };
@@ -239,6 +254,7 @@ export class AuthStore {
   }
 
   revokeToken(token: string): boolean {
+    this.load();
     const record = this.tokens.get(sha256hex(token));
     if (!record) return false;
     record.revoked = true;

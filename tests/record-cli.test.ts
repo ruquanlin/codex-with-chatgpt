@@ -18,6 +18,14 @@ function runRecord(root: string, args: string[]) {
   );
 }
 
+function runExec(root: string, args: string[]) {
+  return spawnSync(process.execPath, ["--import", "tsx", cliEntry, "exec", "--workspace", root, ...args], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    env: process.env,
+  });
+}
+
 function withRecordEnvironment(run: (root: string, workspace: Workspace) => void): void {
   const root = makeTmpDir("record-cli-workspace");
   const stateDir = makeTmpDir("record-cli-state");
@@ -113,6 +121,61 @@ describe("c2c record", () => {
       expect(result.status).toBe(1);
       expect(readExecutionRecords(workspace.id)).toEqual([]);
       expect(listExecutionOutputs(workspace.id)).toEqual([]);
+    });
+  });
+});
+
+describe("c2c exec", () => {
+  it("runs and records a successful validation command", () => {
+    withRecordEnvironment((root, workspace) => {
+      const result = runExec(root, [
+        "--type",
+        "test",
+        "--task",
+        "exec_success",
+        "node",
+        "-e",
+        "console.log('real stdout')",
+      ]);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("real stdout");
+      expect(readExecutionRecords(workspace.id)[0]).toMatchObject({
+        taskId: "exec_success",
+        command: "node -e console.log('real stdout')",
+        exitCode: 0,
+        validationType: "test",
+        exitStatus: "ok",
+      });
+      expect(listExecutionOutputs(workspace.id)[0]).toMatchObject({
+        command: "node -e console.log('real stdout')",
+        exitCode: 0,
+        validationType: "test",
+      });
+    });
+  });
+
+  it("records a failed validation command and exits with the command status", () => {
+    withRecordEnvironment((root, workspace) => {
+      const result = runExec(root, [
+        "--type",
+        "test",
+        "--task",
+        "exec_failure",
+        "node",
+        "-e",
+        "console.error('real stderr'); process.exit(7)",
+      ]);
+
+      expect(result.status).toBe(7);
+      expect(result.stderr).toContain("real stderr");
+      expect(readExecutionRecords(workspace.id)[0]).toMatchObject({
+        taskId: "exec_failure",
+        exitCode: 7,
+        validationType: "test",
+        exitStatus: "failed",
+        outputAvailable: true,
+      });
     });
   });
 });

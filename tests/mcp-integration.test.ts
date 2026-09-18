@@ -45,7 +45,19 @@ beforeAll(async () => {
   stateDir = isolateStateDir();
   root = makeTmpDir("mcp-ws");
   makeGitRepo(root);
-  write(root, "package.json", JSON.stringify({ name: "demo", scripts: { test: "vitest run" }, dependencies: { react: "^19.0.0" } }));
+  write(
+    root,
+    "package.json",
+    JSON.stringify({
+      name: "demo",
+      scripts: {
+        build: "node -e \"console.log('configured build passed')\"",
+        lint: "node -e \"console.log('configured lint passed')\"",
+        test: "node -e \"console.log('configured tests passed')\"",
+      },
+      dependencies: { react: "^19.0.0" },
+    })
+  );
   write(root, ".env", "API_KEY=supersecret\n");
   // an uncommitted change so git_diff has content
   write(root, "src/index.ts", "export const answer = 43; // changed\n");
@@ -58,7 +70,7 @@ beforeAll(async () => {
   });
   const tokens = bridge.authStore.issueTokens({
     clientId: "it-client",
-    scopes: ["workspace.read", "workspace.search", "git.read", "execution.read"],
+    scopes: ["workspace.read", "workspace.search", "workspace.write", "git.read", "execution.read"],
   });
   accessToken = tokens.accessToken;
 
@@ -76,21 +88,24 @@ afterAll(async () => {
 });
 
 describe("MCP tools over Streamable HTTP", () => {
-  it("lists all nine read-only tools", async () => {
+  it("lists all MCP tools", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
+      "apply_patch",
+      "build_project",
       "execution_output",
       "execution_summary",
       "git_diff",
       "git_status",
       "list_directory",
       "read_file",
+      "run_lint",
+      "run_tests",
       "search_workspace",
       "test_status",
       "workspace_info",
     ]);
-    // no write tools in V1
     for (const forbidden of ["write_file", "delete_file", "execute_shell", "git_commit", "install_package"]) {
       expect(names).not.toContain(forbidden);
     }
@@ -103,7 +118,11 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "git_diff", ["isRepo", "mode", "diff", "hasMore", "nextOffset"]);
     expectToolOutputSchema(tools, "test_status", ["available", "tests", "outputAvailable", "outputId"]);
     expectToolOutputSchema(tools, "execution_summary", ["records"]);
-    expectToolOutputSchema(tools, "execution_output", ["action", "items", "text"]);
+    expectToolOutputSchema(tools, "execution_output", ["action", "items", "text", "stdout", "stderr"]);
+    expectToolOutputSchema(tools, "apply_patch", ["checked", "applied"]);
+    expectToolOutputSchema(tools, "run_tests", ["passed", "exitCode", "stdout", "stderr"]);
+    expectToolOutputSchema(tools, "build_project", ["passed", "exitCode", "stdout", "stderr"]);
+    expectToolOutputSchema(tools, "run_lint", ["passed", "exitCode", "stdout", "stderr"]);
   });
 
   it("documents git_diff pagination with its output field names", async () => {
@@ -216,6 +235,54 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(status.outputId).toBeNull();
   });
 
+  it("run_tests runs the configured test command and records output", async () => {
+    const result = await client.callTool({ name: "run_tests", arguments: {} });
+    const tests = structuredJsonOf<{ passed: boolean; exitCode: number; stdout: string; stderr: string }>(result);
+    expect(tests.passed).toBe(true);
+    expect(tests.exitCode).toBe(0);
+    expect(tests.stdout).toContain("configured tests passed");
+
+    const status = structuredJsonOf<{ available: boolean; taskId: string; tests: string; outputAvailable: boolean }>(
+      await client.callTool({ name: "test_status", arguments: {} })
+    );
+    expect(status.available).toBe(true);
+    expect(status.taskId).toBe("mcp_run_tests");
+    expect(status.tests).toBe("passed");
+    expect(status.outputAvailable).toBe(true);
+  });
+
+  it("build_project runs the configured build command and records output", async () => {
+    const result = await client.callTool({ name: "build_project", arguments: {} });
+    const build = structuredJsonOf<{ passed: boolean; exitCode: number; stdout: string; stderr: string }>(result);
+    expect(build.passed).toBe(true);
+    expect(build.exitCode).toBe(0);
+    expect(build.stdout).toContain("configured build passed");
+
+    const status = structuredJsonOf<{ available: boolean; taskId: string; tests: string; outputAvailable: boolean }>(
+      await client.callTool({ name: "test_status", arguments: {} })
+    );
+    expect(status.available).toBe(true);
+    expect(status.taskId).toBe("mcp_build_project");
+    expect(status.tests).toBe("passed");
+    expect(status.outputAvailable).toBe(true);
+  });
+
+  it("run_lint runs the configured lint command and records output", async () => {
+    const result = await client.callTool({ name: "run_lint", arguments: {} });
+    const lint = structuredJsonOf<{ passed: boolean; exitCode: number; stdout: string; stderr: string }>(result);
+    expect(lint.passed).toBe(true);
+    expect(lint.exitCode).toBe(0);
+    expect(lint.stdout).toContain("configured lint passed");
+
+    const status = structuredJsonOf<{ available: boolean; taskId: string; tests: string; outputAvailable: boolean }>(
+      await client.callTool({ name: "test_status", arguments: {} })
+    );
+    expect(status.available).toBe(true);
+    expect(status.taskId).toBe("mcp_run_lint");
+    expect(status.tests).toBe("passed");
+    expect(status.outputAvailable).toBe(true);
+  });
+
   it("skips invalid persisted records when reporting execution status", async () => {
     appendExecutionRecord(bridge.workspace.id, {
       taskId: "c2c_valid_before_invalid",
@@ -252,8 +319,10 @@ describe("MCP tools over Streamable HTTP", () => {
   it("execution_output lists readable items and refuses restricted bodies", async () => {
     const readable = saveExecutionOutput(bridge.workspace.id, {
       command: "pnpm test",
-      raw: "FAIL src/a.test.ts\nAssertionError: expected true",
+      stdout: "FAIL src/a.test.ts",
+      stderr: "AssertionError: expected true",
       exitCode: 1,
+      validationType: "test",
     });
     const hidden = saveExecutionOutput(bridge.workspace.id, {
       command: "print-key",
@@ -277,9 +346,12 @@ describe("MCP tools over Streamable HTTP", () => {
       name: "execution_output",
       arguments: { action: "read", id: readable.id },
     });
-    const body = structuredJsonOf<{ action: "read"; text: string }>(readResult);
+    const body = structuredJsonOf<{ action: "read"; text: string; stdout: string; stderr: string; validationType: string }>(readResult);
     expect(body.action).toBe("read");
     expect(body.text).toContain("AssertionError");
+    expect(body.stdout).toContain("FAIL src/a.test.ts");
+    expect(body.stderr).toContain("AssertionError");
+    expect(body.validationType).toBe("test");
 
     const denied = await client.callTool({
       name: "execution_output",
@@ -313,6 +385,15 @@ describe("MCP tools over Streamable HTTP", () => {
     });
     expect(outputDenied.isError).toBe(true);
     expect(textOf(outputDenied)).toContain("INSUFFICIENT_SCOPE");
+    const runDenied = await limitedClient.callTool({ name: "run_tests", arguments: {} });
+    expect(runDenied.isError).toBe(true);
+    expect(textOf(runDenied)).toContain("INSUFFICIENT_SCOPE");
+    const buildDenied = await limitedClient.callTool({ name: "build_project", arguments: {} });
+    expect(buildDenied.isError).toBe(true);
+    expect(textOf(buildDenied)).toContain("INSUFFICIENT_SCOPE");
+    const lintDenied = await limitedClient.callTool({ name: "run_lint", arguments: {} });
+    expect(lintDenied.isError).toBe(true);
+    expect(textOf(lintDenied)).toContain("INSUFFICIENT_SCOPE");
     const allowed = await limitedClient.callTool({ name: "read_file", arguments: { path: "hello.txt" } });
     expect(allowed.isError ?? false).toBe(false);
     await limitedClient.close();

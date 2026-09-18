@@ -104,17 +104,18 @@ Ready.
 - **控制面（Computer Use）**：Codex 与 ChatGPT 之间只交换极小的结构化 `[C2C]`
   状态消息——`INIT → PLAN → EXECUTED → REVIEW → DONE`。绝不粘贴 diff、日志
   或文件内容。
-- **数据面（MCP）**：ChatGPT 缺什么自己拉什么，共 9 个只读工具：
+- **数据面（MCP）**：ChatGPT 缺什么自己拉什么。大多数工具只读：
   `workspace_info`、`list_directory`、`read_file`、`search_workspace`、
   `git_status`、`git_diff`、`test_status`、`execution_summary`、
-  `execution_output`。
+  `execution_output`；写权限工具只允许应用 patch 和运行项目已配置脚本：
+  `apply_patch`、`run_tests`、`build_project`、`run_lint`。
 - **独立审查**：Codex 执行完毕后，ChatGPT 通过 MCP 亲自检查真实的 git diff
   和测试记录——绝不因为 Codex 说"测试全过"就直接相信。
 
 ## 安全模型（简版）
 
-- **从构造上只读**：服务端根本不存在写文件/删除/Shell/提交类工具，任何提示
-  注入都无法启用它们。
+- **写能力受限**：服务端不存在任意写文件、删除、Shell、提交类工具；写权限
+  仅限 `apply_patch` 和固定运行项目已配置的 test/build/lint 脚本。
 - **一个工作区 = 一道边界**：每个令牌绑定单一工作区；路径校验基于规范化
   realpath（symlink、`../`、绝对路径逃逸全部被拦截并有测试覆盖）。
 - **敏感文件永不外泄**：`.env*`、密钥、SSH、各类凭据默认拒绝
@@ -143,14 +144,15 @@ c2c status / doctor / pair / unpair / logs / stop
 `C2C_TUNNEL_PROTOCOL=http2` 后重启 Bridge。
 
 文档：[架构](docs/architecture.md) · [协议](docs/protocol.md) ·
-[安全](docs/security.md) · [故障排查](docs/troubleshooting.md)
+[MCP 工具](docs/mcp-tools.md) · [安全](docs/security.md) ·
+[故障排查](docs/troubleshooting.md) · [v2.0 发布说明](docs/release-v2.md)
 
 ## 目录结构
 
 ```
 src/
   bridge/     本机回环 HTTP 服务、端口自动恢复、管理 API
-  mcp/        9 个只读工具、无状态 Streamable HTTP
+  mcp/        按 scope 授权的 MCP 工具、无状态 Streamable HTTP
   auth/       OAuth 2.1（PKCE、动态注册、refresh 轮换、吊销）
   pairing/    一次性配对码（CSPRNG、TTL、限速）
   workspace/  路径收敛、敏感文件策略、搜索、git

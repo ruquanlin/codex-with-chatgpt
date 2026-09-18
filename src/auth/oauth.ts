@@ -74,6 +74,7 @@ function pairingPage(opts: {
   const scopeLabels: Record<string, string> = {
     "workspace.read": "Read files in this workspace",
     "workspace.search": "Search this workspace",
+    "workspace.write": "Modify files and run configured workspace actions",
     "git.read": "Read git status and diffs",
     "execution.read": "Read Codex execution summaries",
     offline_access: "Stay connected between sessions",
@@ -155,7 +156,6 @@ export function createOAuthRouter(deps: OAuthDeps): Router {
   };
   router.get("/.well-known/oauth-authorization-server", asMetadataHandler);
   router.get("/.well-known/oauth-authorization-server/mcp", asMetadataHandler);
-  router.get("/.well-known/openid-configuration", asMetadataHandler);
   router.get("/.well-known/oauth-protected-resource", prMetadataHandler);
   router.get("/.well-known/oauth-protected-resource/mcp", prMetadataHandler);
 
@@ -298,15 +298,27 @@ export function createOAuthRouter(deps: OAuthDeps): Router {
     if (grantType === "authorization_code") {
       const { code, code_verifier: codeVerifier, client_id: clientId, redirect_uri: redirectUri } = body;
       if (!code || !codeVerifier || !clientId) {
+        deps.logger.warn("Token exchange rejected: missing required authorization_code fields", {
+          hasCode: Boolean(code),
+          hasCodeVerifier: Boolean(codeVerifier),
+          hasClientId: Boolean(clientId),
+          hasRedirectUri: Boolean(redirectUri),
+          contentType: req.get("content-type") ?? null,
+        });
         res.status(400).json({ error: "invalid_request" });
         return;
       }
       const record = deps.store.consumeAuthorizationCode(code);
       if (!record || record.clientId !== clientId) {
+        deps.logger.warn("Token exchange rejected: invalid authorization code", {
+          hasRecord: Boolean(record),
+          clientId,
+        });
         res.status(400).json({ error: "invalid_grant" });
         return;
       }
       if (redirectUri && redirectUri !== record.redirectUri) {
+        deps.logger.warn("Token exchange rejected: redirect_uri mismatch", { clientId });
         res.status(400).json({ error: "invalid_grant", error_description: "redirect_uri mismatch" });
         return;
       }
@@ -330,11 +342,17 @@ export function createOAuthRouter(deps: OAuthDeps): Router {
     if (grantType === "refresh_token") {
       const { refresh_token: refreshToken, client_id: clientId } = body;
       if (!refreshToken || !clientId) {
+        deps.logger.warn("Token refresh rejected: missing required fields", {
+          hasRefreshToken: Boolean(refreshToken),
+          hasClientId: Boolean(clientId),
+          contentType: req.get("content-type") ?? null,
+        });
         res.status(400).json({ error: "invalid_request" });
         return;
       }
       const result = deps.store.refresh(refreshToken, clientId);
       if (!result.ok) {
+        deps.logger.warn(`Token refresh rejected: ${result.reason}`, { clientId });
         res.status(400).json({ error: result.reason });
         return;
       }
@@ -348,6 +366,10 @@ export function createOAuthRouter(deps: OAuthDeps): Router {
       return;
     }
 
+    deps.logger.warn("Token endpoint rejected unsupported grant type", {
+      grantType: grantType ?? null,
+      contentType: req.get("content-type") ?? null,
+    });
     res.status(400).json({ error: "unsupported_grant_type" });
   });
 

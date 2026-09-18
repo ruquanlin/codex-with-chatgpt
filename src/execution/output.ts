@@ -13,6 +13,7 @@ export interface ExecutionOutputMeta {
   timestamp: string;
   taskId?: string;
   iteration?: number;
+  validationType?: "test" | "lint" | "build" | "typecheck" | "other";
   allowed: boolean;
   restrictedReason?: string;
   truncated: boolean;
@@ -36,6 +37,12 @@ function bodyFile(workspaceId: string, id: number): string {
   return path.join(outputDir(workspaceId), "bodies", `${id}.txt`);
 }
 
+interface OutputBody {
+  text: string;
+  stdout?: string;
+  stderr?: string;
+}
+
 function readIndex(workspaceId: string): OutputIndex {
   return (
     readJsonIfExists<OutputIndex>(indexFile(workspaceId)) ?? {
@@ -51,20 +58,44 @@ function writeIndex(workspaceId: string, index: OutputIndex): void {
 
 export interface SaveOutputInput {
   command: string;
-  raw: string;
+  raw?: string;
+  stdout?: string;
+  stderr?: string;
   exitCode?: number | null;
   taskId?: string;
   iteration?: number;
+  validationType?: ExecutionOutputMeta["validationType"];
 }
 
 export function saveExecutionOutput(workspaceId: string, input: SaveOutputInput): ExecutionOutputMeta {
-  const sanitized = sanitizeExecutionOutput(input.raw);
+  const raw =
+    input.raw ??
+    [
+      input.stdout ? `[stdout]\n${input.stdout}` : "",
+      input.stderr ? `[stderr]\n${input.stderr}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  const sanitized = sanitizeExecutionOutput(raw);
+  const stdoutSanitized = input.stdout === undefined ? undefined : sanitizeExecutionOutput(input.stdout);
+  const stderrSanitized = input.stderr === undefined ? undefined : sanitizeExecutionOutput(input.stderr);
+  const stdoutAllowed = stdoutSanitized?.allowed ?? true;
+  const stderrAllowed = stderrSanitized?.allowed ?? true;
+  const allowed =
+    sanitized.allowed &&
+    stdoutAllowed &&
+    stderrAllowed;
   const index = readIndex(workspaceId);
   const id = index.nextId;
   const timestamp = new Date().toISOString();
-  const allowed = sanitized.allowed;
   const text = allowed ? sanitized.text : "";
-  const truncated = allowed ? sanitized.truncated : false;
+  const stdout = allowed && stdoutSanitized?.allowed ? stdoutSanitized.text : undefined;
+  const stderr = allowed && stderrSanitized?.allowed ? stderrSanitized.text : undefined;
+  const truncated = allowed
+    ? sanitized.truncated ||
+      Boolean(stdoutSanitized?.allowed ? stdoutSanitized.truncated : false) ||
+      Boolean(stderrSanitized?.allowed ? stderrSanitized.truncated : false)
+    : false;
   const meta: ExecutionOutputMeta = {
     id,
     command: redact(input.command).slice(0, 200),
@@ -72,15 +103,25 @@ export function saveExecutionOutput(workspaceId: string, input: SaveOutputInput)
     timestamp,
     taskId: input.taskId,
     iteration: input.iteration,
+    validationType: input.validationType,
     allowed,
-    restrictedReason: allowed ? undefined : sanitized.reason,
+    restrictedReason: allowed
+      ? undefined
+      : !sanitized.allowed
+        ? sanitized.reason
+        : stdoutSanitized && !stdoutSanitized.allowed
+          ? stdoutSanitized.reason
+          : stderrSanitized && !stderrSanitized.allowed
+            ? stderrSanitized.reason
+            : "restricted",
     truncated,
     sizeBytes: Buffer.byteLength(text, "utf8"),
   };
   if (allowed && text) {
     const file = bodyFile(workspaceId, id);
     ensureDir(path.dirname(file));
-    fs.writeFileSync(file, text, { mode: 0o600 });
+    const body: OutputBody = { text, stdout, stderr };
+    fs.writeFileSync(file, JSON.stringify(body), { mode: 0o600 });
     try {
       fs.chmodSync(file, 0o600);
     } catch {
@@ -108,12 +149,23 @@ export function readExecutionOutput(
   workspaceId: string,
   id: number
 ):
-  | { ok: true; meta: ExecutionOutputMeta; text: string }
+  | { ok: true; meta: ExecutionOutputMeta; text: string; stdout?: string; stderr?: string }
   | { ok: false; error: "NOT_FOUND" | "OUTPUT_RESTRICTED" } {
   const meta = readIndex(workspaceId).items.find((item) => item.id === id);
   if (!meta) return { ok: false, error: "NOT_FOUND" };
   if (!meta.allowed) return { ok: false, error: "OUTPUT_RESTRICTED" };
   const file = bodyFile(workspaceId, id);
-  const text = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
-  return { ok: true, meta, text };
+  const body = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+  try {
+    const parsed = JSON.parse(body) as Partial<OutputBody>;
+    return {
+      ok: true,
+      meta,
+      text: typeof parsed.text === "string" ? parsed.text : "",
+      stdout: typeof parsed.stdout === "string" ? parsed.stdout : undefined,
+      stderr: typeof parsed.stderr === "string" ? parsed.stderr : undefined,
+    };
+  } catch {
+    return { ok: true, meta, text: body };
+  }
 }

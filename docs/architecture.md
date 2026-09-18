@@ -11,13 +11,13 @@
                         ▼          │
              ┌─────────────────────┐
              │      C2C Bridge     │
-             │  MCP Server (RO)    │
+             │  Scoped MCP Server  │
              │  OAuth AS + PRM     │
              │  Pairing Manager    │
              │  Tunnel Manager     │
              │  Admin API (local)  │
              └──────────┬──────────┘
-                        │  read-only
+                        │  scoped read/write
                         ▼
              ┌─────────────────────┐
              │   Local Workspace   │
@@ -32,21 +32,42 @@
 
 - **ChatGPT thinks. Codex works.** The bridge never re-implements a coding harness.
 - **Computer Use = control plane**: tiny `[C2C]` state messages (< 1 KB).
-- **MCP = data plane**: ChatGPT pulls files/diffs/search results itself.
-- **Read-only by design**: no write/exec tools exist in V1 at all.
+- **MCP = data plane**: ChatGPT pulls files, diffs, search results and recorded execution output itself.
+- **Write capability is narrow**: write-scoped MCP tools are limited to `apply_patch` and fixed package scripts (`run_tests`, `build_project`, `run_lint`).
 - **Workspace is the security boundary**: one bridge = one workspace = one token audience.
+
+## MCP responsibility flow
+
+```
+ChatGPT
+   |
+   v
+MCP tools
+   |
+   v
+workspace/    execution/    git/
+   |              |          |
+   v              v          v
+Filesystem    Package       Git
+              scripts
+```
+
+The MCP layer owns authentication, input schemas, output schemas and tool-level
+scope checks. Workspace, execution and git modules own local behavior and safety
+checks. Package-script tools execute only configured scripts from `package.json`;
+they are not a generic shell.
 
 ## Components (src/)
 
 | Module | Responsibility |
 | --- | --- |
 | `bridge/` | Express app assembly, loopback-only listener, port fallback, runtime state, admin API |
-| `mcp/` | McpServer with 9 read-only tools; stateless Streamable HTTP transport (fresh server per request, JSON responses) |
+| `mcp/` | McpServer with scoped tools; stateless Streamable HTTP transport (fresh server per request, JSON responses) |
 | `auth/` | OAuth 2.1 authorization server: discovery metadata (RFC 8414 + Protected Resource Metadata), dynamic client registration (RFC 7591), authorization-code + PKCE (S256 only), refresh rotation, revocation (RFC 7009). Opaque tokens stored as SHA-256 hashes |
 | `pairing/` | PairingCode lifecycle: CSPRNG generation, TTL, attempt limits, IP rate limit, one-time use |
 | `workspace/` | Canonical-path containment (realpath of deepest existing ancestor), sensitive-file policy, `.c2cignore`, paginated read/list, ripgrep search with Node fallback, git status/diff with pagination |
 | `tunnel/` | `TunnelProvider` interface + Cloudflare Quick and workspace-configured Named Tunnel implementations; business logic is vendor-agnostic |
-| `execution/` | JSONL execution records plus optional sanitized command output (`execution_output`) |
+| `execution/` | Fixed package-script runner, JSONL execution records plus optional sanitized command output (`execution_output`) |
 | `process/` | Daemon spawn/reuse, health probing, graceful shutdown |
 | `cli/` | `c2c` commands; `--json` everywhere for the Skill |
 | `config/`, `logger/` | OS-convention state dir, secret-redacting logger |
