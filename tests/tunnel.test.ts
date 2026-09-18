@@ -20,7 +20,12 @@ import {
   type CloudflaredAccount,
 } from "../src/tunnel/named-provision.js";
 import { resolveTunnelProtocol, tunnelProtocolArgs } from "../src/tunnel/protocol.js";
-import { isNamedTunnelReady, needsTunnelChoice, readTunnelState } from "../src/tunnel/state.js";
+import {
+  isNamedTunnelReady,
+  needsTunnelChoice,
+  readTunnelState,
+  shouldAutoRecoverNamedTunnel,
+} from "../src/tunnel/state.js";
 import { cleanup, isolateStateDir, makeTmpDir, write } from "./helpers.js";
 
 const stateDirs: string[] = [];
@@ -77,6 +82,47 @@ describe("findBinary", () => {
     if (process.platform !== "win32") fs.chmodSync(configured, 0o755);
     process.env.C2C_CLOUDFLARED_PATH = configured;
     expect(findBinary("cloudflared")).toBe(configured);
+  });
+});
+
+describe("named tunnel lifecycle recovery", () => {
+  const namedState = {
+    workspaceId: "workspace-1",
+    preference: "named" as const,
+    tunnelName: "c2c-workspace-1",
+    hostname: "c2c.example.com",
+  };
+
+  it("recovers a persisted named tunnel after the connector process is gone", () => {
+    expect(shouldAutoRecoverNamedTunnel(namedState, { running: false })).toBe(true);
+  });
+
+  it("does not start a duplicate when the named connector is healthy", () => {
+    expect(shouldAutoRecoverNamedTunnel(namedState, { running: true })).toBe(false);
+  });
+
+  it("keeps an unconfigured workspace local-only", () => {
+    expect(
+      shouldAutoRecoverNamedTunnel(
+        { workspaceId: "workspace-2", preference: "unset" },
+        { running: false }
+      )
+    ).toBe(false);
+  });
+
+  it("does not recover a quick or incomplete tunnel state as named", () => {
+    expect(
+      shouldAutoRecoverNamedTunnel(
+        { workspaceId: "workspace-3", preference: "quick" },
+        { running: false }
+      )
+    ).toBe(false);
+    expect(
+      shouldAutoRecoverNamedTunnel(
+        { workspaceId: "workspace-4", preference: "named", tunnelName: "only-name" },
+        { running: false }
+      )
+    ).toBe(false);
   });
 });
 

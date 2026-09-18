@@ -18,6 +18,7 @@ import {
 import { parseZoneInput, suggestedNamedHostname } from "../tunnel/hostname.js";
 import {
   isNamedTunnelReady,
+  shouldAutoRecoverNamedTunnel,
   NAMED_LOGIN_PROMPT,
   NAMED_REPAIR_MESSAGE,
   needsTunnelChoice,
@@ -232,7 +233,9 @@ async function ensureBridgeAndTunnel(
   const { runtime } = await ensureBridge(workspaceRoot);
   let info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
   let mcpUrl: string | null = info.publicUrl ? `${info.publicUrl}/mcp` : null;
-  if (opts.tunnel && !info.publicUrl) {
+  const persistedTunnel = readTunnelState(info.workspaceId);
+  const recoverNamedTunnel = shouldAutoRecoverNamedTunnel(persistedTunnel, info.tunnel);
+  if ((opts.tunnel && !info.publicUrl) || recoverNamedTunnel) {
     const binaries = detectTunnelBinaries();
     if (!binaries.cloudflared) {
       throw new Error(
