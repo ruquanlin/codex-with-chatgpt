@@ -186,15 +186,21 @@ that close the tab, hide the window, or stall on the settings page.
   All commands support `--json` for parsing.
 - If the checkout has no `node_modules` or no `dist/`, first run
   `corepack pnpm install && corepack pnpm build` inside it.
-- Always pass `-w <workspace root>` (the project the user is working on, NOT the c2c repo).
+- For commands that act on the user's project (`setup`, `doctor`, `session`,
+  `restart`, `start`, `stop`, `status`, `pair`, `unpair`, `logs`, `workspace`,
+  `record`, `tunnel status`, `tunnel choose`), pass `-w <workspace root>`
+  (the project the user is working on, NOT the c2c repo).
+- Do not add `-w` to machine-wide commands: `update-check`, `sandbox-allow`,
+  `prefs`, `tunnel login`. They still accept and ignore `-w`, so a leftover
+  flag must not fail the command.
 
 ## Daily update check
 
 At the START of every workflow below (before anything else), run these two
 commands (both are cheap / cached; never mention them unless an update exists):
 
-1. `c2c update-check --json`
-2. `c2c sandbox-allow --json` — writes the C2C state directory into Codex's
+1. `c2c update-check --json` (do not pass `-w`)
+2. `c2c sandbox-allow --json` (do not pass `-w`) — writes the C2C state directory into Codex's
    sandbox `writable_roots` (macOS: `~/Library/Application Support/codex-with-chatgpt`;
    Windows: `%LOCALAPPDATA%\codex-with-chatgpt`; config file is
    `~/.codex/config.toml` on both, or `%USERPROFILE%\.codex\config.toml` on Windows).
