@@ -57,6 +57,12 @@ import {
 } from "../session/state.js";
 import { appendExecutionRecord } from "../execution/records.js";
 import { saveExecutionOutput, type ExecutionOutputMeta } from "../execution/output.js";
+import {
+  disableMacAutostart,
+  enableMacAutostart,
+  macAutostartStatus,
+  type MacAutostartStatus,
+} from "../autostart/macos.js";
 
 const program = new Command();
 
@@ -200,6 +206,25 @@ function trySandboxAllow():
   } catch (error) {
     return { ok: false, added: false, alreadyAllowed: false, error: (error as Error).message };
   }
+}
+
+function autostartPayload(root: string): { workspace: Workspace; config: { workspaceId: string; workspaceRoot: string } } {
+  const workspace = new Workspace(root);
+  return { workspace, config: { workspaceId: workspace.id, workspaceRoot: workspace.root } };
+}
+
+function printAutostartStatus(status: MacAutostartStatus, json: boolean): void {
+  if (json) {
+    say(JSON.stringify(status));
+    return;
+  }
+  say(`installed: ${status.installed ? "yes" : "no"}`);
+  say(`loaded: ${status.loaded === null ? "unknown" : status.loaded ? "yes" : "no"}`);
+  say(`running: ${status.running === null ? "unknown" : status.running ? "yes" : "no"}`);
+  if (status.pid) say(`pid: ${status.pid}`);
+  say(`workspace: ${status.workspace}`);
+  say(`identifier: ${status.identifier}`);
+  say(`path: ${status.path}`);
 }
 
 interface TunnelStartResponse {
@@ -413,6 +438,55 @@ program
       if (mcpUrl) check(`安全连接已建立`);
     } catch (error) {
       handleCliError(error, false);
+    }
+  });
+
+// ---------------------------------------------------------------- autostart
+
+const autostartCmd = program.command("autostart").description("Manage macOS login autostart for this workspace");
+
+autostartCmd
+  .command("enable")
+  .description("Install and load a workspace-specific macOS LaunchAgent")
+  .option("-w, --workspace <path>", "workspace root (defaults to current directory)")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; json: boolean }) => {
+    try {
+      const { config } = autostartPayload(resolveWorkspace(opts.workspace));
+      const status = enableMacAutostart(config);
+      printAutostartStatus(status, opts.json);
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+autostartCmd
+  .command("disable")
+  .description("Unload and remove this workspace's macOS LaunchAgent")
+  .option("-w, --workspace <path>", "workspace root (defaults to current directory)")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; json: boolean }) => {
+    try {
+      const { config } = autostartPayload(resolveWorkspace(opts.workspace));
+      const status = disableMacAutostart(config);
+      printAutostartStatus(status, opts.json);
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+autostartCmd
+  .command("status", { isDefault: true })
+  .description("Show this workspace's macOS LaunchAgent state")
+  .option("-w, --workspace <path>", "workspace root (defaults to current directory)")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; json: boolean }) => {
+    try {
+      const { config } = autostartPayload(resolveWorkspace(opts.workspace));
+      const status = macAutostartStatus(config);
+      printAutostartStatus(status, opts.json);
+    } catch (error) {
+      handleCliError(error, opts.json);
     }
   });
 

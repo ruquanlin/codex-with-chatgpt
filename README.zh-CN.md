@@ -137,11 +137,30 @@ pnpm test           # vitest：150 个测试（路径安全、OAuth、配对、M
 c2c setup           # 一条命令：Bridge + 隧道 + 配对码
 c2c sandbox-allow   # 把本地设置目录加入 Codex 沙箱白名单（macOS / Windows）
 c2c status / doctor / pair / unpair / logs / stop
+c2c autostart enable -w /path/to/workspace   # macOS：登录后自动恢复此 workspace
+c2c autostart status -w /path/to/workspace
+c2c autostart disable -w /path/to/workspace
 ```
 
 环境要求：Node.js >= 20、git；公网连接需要 `cloudflared`
 （自动检测，Skill 会替你安装）。如果 QUIC 被拦截，设置
 `C2C_TUNNEL_PROTOCOL=http2` 后重启 Bridge。
+
+### macOS 登录自动启动
+
+`c2c autostart enable -w <workspace>` 会为指定 workspace 安装用户级
+LaunchAgent。下次 macOS 登录时，launchd 会用可靠的绝对路径执行现有
+`c2c start -w <workspace>` 流程，因此无需打开终端或手动运行 C2C 命令，
+Bridge 会自动恢复。
+
+如果该 workspace 使用持久化的 Cloudflare named tunnel，恢复仍然走
+`c2c start` 里已有的 named tunnel auto-recovery：重新拉起
+`cloudflared` connector，但保持同一个固定域名、ChatGPT connector、OAuth
+identity、endpoint state 和 tunnel identity。
+
+Autostart 不会把 `cloudflared` 单独注册成系统 service；`cloudflared`
+仍由 Bridge 管理生命周期。`disable` 只移除 LaunchAgent，不删除 workspace
+数据、OAuth、endpoint 或 named tunnel state。
 
 文档：[架构](docs/architecture.md) · [协议](docs/protocol.md) ·
 [MCP 工具](docs/mcp-tools.md) · [安全](docs/security.md) ·

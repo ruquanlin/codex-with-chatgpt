@@ -48,6 +48,26 @@ If this workspace uses a stable hostname, doctor sets `namedRepair` instead —
 re-login to Cloudflare (`c2c tunnel login`) and doctor again. Do not Delete
 the connector; the address did not change.
 
+### macOS restart causes Cloudflare 1033
+For stable hostnames, Cloudflare 1033 usually means the named tunnel and DNS
+still exist but there is no active `cloudflared` connector on the Mac. Enable
+workspace autostart so macOS login runs the normal C2C startup path:
+
+```
+c2c autostart enable -w /path/to/workspace
+c2c autostart status -w /path/to/workspace
+```
+
+Autostart installs a user LaunchAgent for that workspace. On login it runs
+`c2c start -w /path/to/workspace`, which reuses the existing bridge startup
+logic and the persisted named tunnel recovery. It does not create a separate
+cloudflared service, and it does not change OAuth, endpoint or tunnel identity.
+To remove only the login item:
+
+```
+c2c autostart disable -w /path/to/workspace
+```
+
 ### I have a Cloudflare domain and want a stable hostname
 During first-time setup (or the next coding session, once), say you have a
 Cloudflare account and give the domain. Codex opens a browser for Cloudflare

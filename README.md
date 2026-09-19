@@ -208,11 +208,29 @@ pnpm test           # vitest: 150 tests (path security, OAuth, pairing, MCP e2e)
 c2c setup           # bridge + tunnel + pairing code, all in one
 c2c sandbox-allow   # whitelist the settings dir in Codex (macOS + Windows)
 c2c status / doctor / pair / unpair / logs / stop
+c2c autostart enable -w /path/to/workspace   # macOS: restore this workspace at login
+c2c autostart status -w /path/to/workspace
+c2c autostart disable -w /path/to/workspace
 ```
 
 Requirements: Node.js >= 20, git. `cloudflared` for the public connection
 (auto-detected; the Skill installs it for you). If QUIC is blocked, set
 `C2C_TUNNEL_PROTOCOL=http2` and restart the bridge.
+
+### macOS login autostart
+
+`c2c autostart enable -w <workspace>` installs a user-level LaunchAgent for that
+specific workspace. At the next macOS login, launchd runs the existing
+`c2c start -w <workspace>` flow with absolute paths, so the Bridge comes back
+without an interactive shell. If the workspace uses a persisted Cloudflare named
+tunnel, the normal named-tunnel recovery in `c2c start` re-establishes the
+connector at the same public hostname; ChatGPT keeps the same connector, OAuth
+identity, endpoint and tunnel identity.
+
+Autostart does not register `cloudflared` as a separate service. The Bridge still
+owns the `cloudflared` connector process lifecycle. `disable` only removes the
+LaunchAgent; it does not delete workspace data, OAuth tokens, endpoint state or
+named tunnel state.
 
 Docs: [architecture](docs/architecture.md) · [protocol](docs/protocol.md) ·
 [MCP tools](docs/mcp-tools.md) · [security](docs/security.md) ·
