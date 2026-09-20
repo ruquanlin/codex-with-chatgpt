@@ -26,6 +26,14 @@ function runExec(root: string, args: string[]) {
   });
 }
 
+function runSessionSet(root: string, args: string[]) {
+  return spawnSync(process.execPath, ["--import", "tsx", cliEntry, "session", "set", "--workspace", root, ...args], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    env: process.env,
+  });
+}
+
 function withRecordEnvironment(run: (root: string, workspace: Workspace) => void): void {
   const root = makeTmpDir("record-cli-workspace");
   const stateDir = makeTmpDir("record-cli-state");
@@ -43,6 +51,44 @@ function withRecordEnvironment(run: (root: string, workspace: Workspace) => void
 }
 
 describe("c2c record", () => {
+  it("creates exactly one metadata record for a successful iteration without validation", () => {
+    withRecordEnvironment((root, workspace) => {
+      const first = runRecord(root, [
+        "--iteration",
+        "1",
+        "--changed-files",
+        "src/a.ts,src/b.ts",
+        "--tests",
+        "not run",
+        "--exit-status",
+        "ok",
+      ]);
+      const second = runRecord(root, [
+        "--iteration",
+        "1",
+        "--changed-files",
+        "src/a.ts,src/b.ts",
+        "--tests",
+        "not run",
+        "--exit-status",
+        "ok",
+      ]);
+
+      expect(first.status).toBe(0);
+      expect(second.status).toBe(0);
+      expect(readExecutionRecords(workspace.id)).toEqual([
+        expect.objectContaining({
+          taskId: "c2c_test",
+          iteration: 1,
+          changedFiles: ["src/a.ts", "src/b.ts"],
+          tests: "not run",
+          exitStatus: "ok",
+        }),
+      ]);
+      expect(listExecutionOutputs(workspace.id)).toEqual([]);
+    });
+  });
+
   it("records valid numeric options and command output", () => {
     withRecordEnvironment((root, workspace) => {
       const result = runRecord(root, [
@@ -60,7 +106,7 @@ describe("c2c record", () => {
 
       expect(result.status).toBe(0);
       expect(readExecutionRecords(workspace.id)).toEqual([
-        expect.objectContaining({ taskId: "c2c_test", iteration: 2, changedFiles: 3 }),
+        expect.objectContaining({ taskId: "c2c_test", iteration: 2, changedFiles: 3, outputId: 1 }),
       ]);
       expect(listExecutionOutputs(workspace.id)).toEqual([
         expect.objectContaining({ command: "pnpm test", exitCode: 1, iteration: 2 }),
@@ -178,6 +224,28 @@ describe("c2c exec", () => {
       });
     });
   });
+
+  it("does not create duplicate records or outputs when finalization is retried for the same task iteration", () => {
+    withRecordEnvironment((root, workspace) => {
+      const args = [
+        "--type",
+        "build",
+        "--task",
+        "dup_case",
+        "--iteration",
+        "4",
+        "node",
+        "-e",
+        "console.log('built')",
+      ];
+
+      expect(runExec(root, args).status).toBe(0);
+      expect(runExec(root, args).status).toBe(0);
+
+      expect(readExecutionRecords(workspace.id)).toHaveLength(1);
+      expect(listExecutionOutputs(workspace.id)).toHaveLength(1);
+    });
+  });
 });
 
 describe("execution record persistence", () => {
@@ -193,6 +261,54 @@ describe("execution record persistence", () => {
       };
 
       expect(() => appendExecutionRecord(workspace.id, invalidRecord)).toThrow();
+      expect(readExecutionRecords(workspace.id)).toEqual([]);
+    });
+  });
+});
+
+describe("EXECUTED checkpoint guard", () => {
+  it("allows a resumed/recovered EXECUTED_LOCAL checkpoint only after the iteration is recorded", () => {
+    withRecordEnvironment((root, workspace) => {
+      const record = runRecord(root, ["--iteration", "3", "--changed-files", "1", "--exit-status", "ok"]);
+      expect(record.status).toBe(0);
+
+      const result = runSessionSet(root, [
+        "--task",
+        "c2c_test",
+        "--iteration",
+        "3",
+        "--state",
+        "EXECUTED",
+        "--protocol-state",
+        "EXECUTED_LOCAL",
+        "--waiting-for",
+        "none",
+        "--next-step",
+        "send EXECUTED",
+      ]);
+
+      expect(result.status).toBe(0);
+      expect(readExecutionRecords(workspace.id)).toHaveLength(1);
+    });
+  });
+
+  it("refuses to mark EXECUTED when persistence is missing", () => {
+    withRecordEnvironment((root, workspace) => {
+      const result = runSessionSet(root, [
+        "--task",
+        "missing_record",
+        "--iteration",
+        "1",
+        "--state",
+        "EXECUTED",
+        "--protocol-state",
+        "EXECUTED_SENT",
+        "--waiting-for",
+        "GPT_REVIEW",
+      ]);
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("before c2c record has persisted");
       expect(readExecutionRecords(workspace.id)).toEqual([]);
     });
   });

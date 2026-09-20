@@ -2,14 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 
-/**
- * State directory resolution, following OS conventions.
- * Override with C2C_STATE_DIR (used heavily by tests).
- */
-export function getStateDir(): string {
-  const override = process.env.C2C_STATE_DIR;
-  if (override && override.trim() !== "") return path.resolve(override);
-  const home = os.homedir();
+export function defaultStateDir(home = os.homedir()): string {
   switch (process.platform) {
     case "darwin":
       return path.join(home, "Library", "Application Support", "codex-with-chatgpt");
@@ -20,6 +13,16 @@ export function getStateDir(): string {
       return path.join(base, "codex-with-chatgpt");
     }
   }
+}
+
+/**
+ * State directory resolution, following OS conventions.
+ * Override with C2C_STATE_DIR (used heavily by tests).
+ */
+export function getStateDir(): string {
+  const override = process.env.C2C_STATE_DIR;
+  if (override && override.trim() !== "") return path.resolve(override);
+  return defaultStateDir();
 }
 
 export function ensureDir(dir: string): string {

@@ -31,6 +31,7 @@ function recordsFile(workspaceId: string): string {
 }
 
 export function appendExecutionRecord(workspaceId: string, record: ExecutionRecord): void {
+  if (hasExecutionRecord(workspaceId, record.taskId, record.iteration)) return;
   const file = recordsFile(workspaceId);
   fs.appendFileSync(file, JSON.stringify(executionRecordSchema.parse(record)) + "\n", { mode: 0o600 });
 }
@@ -55,4 +56,21 @@ export function readExecutionRecords(workspaceId: string, limit = 10): Execution
 export function latestExecutionRecord(workspaceId: string): ExecutionRecord | null {
   const records = readExecutionRecords(workspaceId, 1);
   return records[records.length - 1] ?? null;
+}
+
+export function hasExecutionRecord(workspaceId: string, taskId: string, iteration: number): boolean {
+  const file = recordsFile(workspaceId);
+  if (!fs.existsSync(file)) return false;
+  const lines = fs.readFileSync(file, "utf8").trim().split("\n").filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index--) {
+    try {
+      const record = executionRecordSchema.safeParse(JSON.parse(lines[index]));
+      if (record.success && record.data.taskId === taskId && record.data.iteration === iteration) {
+        return true;
+      }
+    } catch {
+      // skip corrupt lines
+    }
+  }
+  return false;
 }

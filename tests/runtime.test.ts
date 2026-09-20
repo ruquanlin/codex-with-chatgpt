@@ -5,6 +5,7 @@ import { startBridge } from "../src/bridge/server.js";
 import {
   findBridgeObservation,
   findLiveBridge,
+  readRuntimeState,
   writeRuntimeState,
   type RuntimeState,
 } from "../src/bridge/runtime.js";
@@ -108,6 +109,7 @@ describe("findBridgeObservation", () => {
       const observation = await findBridgeObservation(bridge.workspace.id);
       expect(observation.state).toBe("healthy");
       expect(await findLiveBridge(bridge.workspace.id)).not.toBeNull();
+      expect(readRuntimeState(bridge.workspace.id)?.stateDir).toBe(process.env.C2C_STATE_DIR);
     } finally {
       await bridge.close();
     }

@@ -56,8 +56,33 @@ describe("macOS autostart", () => {
       expect(plist).toContain("<string>start</string>");
       expect(plist).toContain("<string>-w</string>");
       expect(plist).toContain("<string>--json</string>");
+      expect(plist).toContain("<key>EnvironmentVariables</key>");
+      expect(plist).toContain("<key>C2C_STATE_DIR</key>");
+      expect(plist).toContain(`<string>${home}/Library/Application Support/codex-with-chatgpt</string>`);
       expect(plist).toContain("Project &amp; Space&apos;s &lt;DA&gt;");
       expect(plist).not.toContain("sh -c");
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  it("can pin an explicit state root for autostart-like environments", () => {
+    const home = makeTmpDir("autostart-home");
+    try {
+      const stateDir = path.join(home, "Custom State Root");
+      const plist = macAutostartPlist({
+        workspaceId: "state-root",
+        workspaceRoot: path.join(home, "Workspace"),
+        nodePath: "/usr/local/bin/node",
+        cliPath: "/repo/bin/c2c.js",
+        homeDir: home,
+        stateDir,
+      });
+
+      expect(plist).toContain("<key>C2C_STATE_DIR</key>");
+      expect(plist).toContain(`<string>${stateDir}</string>`);
+      expect(plist).toContain(`<string>${stateDir}/logs/autostart-state-root.out.log</string>`);
+      expect(plist).toContain(`<string>${stateDir}/logs/autostart-state-root.err.log</string>`);
     } finally {
       cleanup(home);
     }

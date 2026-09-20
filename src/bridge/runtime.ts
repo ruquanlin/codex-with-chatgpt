@@ -18,6 +18,7 @@ export interface RuntimeState {
   adminToken: string;
   publicUrl: string | null;
   startedAt: string;
+  stateDir?: string;
 }
 
 export function runtimeFile(workspaceId: string): string {

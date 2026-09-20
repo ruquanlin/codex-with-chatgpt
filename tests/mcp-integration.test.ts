@@ -235,6 +235,29 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(status.outputId).toBeNull();
   });
 
+  it("bridge admin state uses the same state root as execution records", async () => {
+    const response = await fetch(`${bridge.localBaseUrl()}/admin/info`, {
+      headers: { authorization: `Bearer ${bridge.adminToken}` },
+    });
+    expect(response.ok).toBe(true);
+    const info = (await response.json()) as { stateDir?: string };
+    expect(info.stateDir).toBe(stateDir);
+
+    appendExecutionRecord(bridge.workspace.id, {
+      taskId: "state_root_shared",
+      iteration: 1,
+      changedFiles: 0,
+      tests: "state root visible",
+      exitStatus: "ok",
+      timestamp: new Date().toISOString(),
+    });
+
+    const summary = structuredJsonOf<{ records: { taskId: string }[] }>(
+      await client.callTool({ name: "execution_summary", arguments: { limit: 20 } })
+    );
+    expect(summary.records.some((record) => record.taskId === "state_root_shared")).toBe(true);
+  });
+
   it("run_tests runs the configured test command and records output", async () => {
     const result = await client.callTool({ name: "run_tests", arguments: {} });
     const tests = structuredJsonOf<{ passed: boolean; exitCode: number; stdout: string; stderr: string }>(result);

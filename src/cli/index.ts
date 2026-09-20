@@ -55,7 +55,7 @@ import {
   type ProtocolState,
   type WaitingFor,
 } from "../session/state.js";
-import { appendExecutionRecord } from "../execution/records.js";
+import { appendExecutionRecord, hasExecutionRecord } from "../execution/records.js";
 import { saveExecutionOutput, type ExecutionOutputMeta } from "../execution/output.js";
 import {
   disableMacAutostart,
@@ -135,6 +135,25 @@ function parseValidationType(value: string): ExecutionOutputMeta["validationType
 function summarizeExit(validationType: ExecutionOutputMeta["validationType"], exitCode: number): string {
   if (exitCode === 0) return validationType === "test" ? "passed" : `${validationType ?? "command"} passed`;
   return validationType === "test" ? "failed" : `${validationType ?? "command"} failed`;
+}
+
+function isExecutedState(state?: string): boolean {
+  return state?.trim().toUpperCase() === "EXECUTED";
+}
+
+function isExecutedCheckpoint(state?: ProtocolState): boolean {
+  return state === "EXECUTED_LOCAL" || state === "EXECUTED_SENT";
+}
+
+function assertExecutionRecordPersisted(workspace: Workspace, taskId?: string, iteration?: number): void {
+  if (!taskId || iteration === undefined || !Number.isInteger(iteration) || iteration < 0) {
+    throw new Error("EXECUTED requires task id, iteration, and a persisted execution record.");
+  }
+  if (!hasExecutionRecord(workspace.id, taskId, iteration)) {
+    throw new Error(
+      `Cannot mark ${taskId} iteration ${iteration} EXECUTED before c2c record has persisted execution metadata.`
+    );
+  }
 }
 
 function nextRecordedIteration(workspace: Workspace): number {
@@ -249,6 +268,7 @@ interface AdminInfo {
   pairingActive: boolean;
   pid: number;
   startedAt: string;
+  stateDir?: string;
 }
 
 async function ensureBridgeAndTunnel(
@@ -1070,11 +1090,20 @@ session
       if (waitingNorm && !WAITING_FOR.includes(waitingNorm as WaitingFor)) {
         throw new Error(`waiting-for must be one of ${WAITING_FOR.join(", ")}`);
       }
+      const parsedIteration = opts.iteration ? parseInt(opts.iteration, 10) : undefined;
+      if (isExecutedState(opts.state) || isExecutedCheckpoint(protocolRaw as ProtocolState | undefined)) {
+        const previous = readSession(workspace.id);
+        assertExecutionRecordPersisted(
+          workspace,
+          opts.task ?? previous?.taskId ?? previous?.checkpoint?.taskId,
+          parsedIteration ?? previous?.iteration ?? previous?.checkpoint?.iteration
+        );
+      }
       const saved = mergeSession(readSession(workspace.id), {
         url: opts.url,
         title: opts.title,
         taskId: opts.task,
-        iteration: opts.iteration ? parseInt(opts.iteration, 10) : undefined,
+        iteration: parsedIteration,
         lastState: opts.state,
         conversationMode: modeRaw as ConversationMode | undefined,
         projectUrl: opts.projectUrl,
@@ -1203,6 +1232,10 @@ program
     }) => {
       const workspace = new Workspace(resolveWorkspace(opts.workspace));
       const changed = parseChangedFiles(opts.changedFiles);
+      if (hasExecutionRecord(workspace.id, opts.task, opts.iteration)) {
+        check("执行摘要已存在，未重复记录");
+        return;
+      }
       let outputId: number | undefined;
       let outputAvailable = false;
       const rawOutput =
@@ -1283,6 +1316,9 @@ program
       if (stderr) process.stderr.write(stderr);
       const exitCode = result.error ? 1 : (result.status ?? 1);
       const iteration = opts.iteration ?? nextRecordedIteration(workspace);
+      if (hasExecutionRecord(workspace.id, opts.task, iteration)) {
+        process.exit(exitCode);
+      }
       const savedOutput = saveExecutionOutput(workspace.id, {
         command: display,
         stdout,

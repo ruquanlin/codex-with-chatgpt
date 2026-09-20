@@ -127,6 +127,13 @@ stdout/stderr. Prefer `c2c exec --type <test|lint|build|typecheck> --
 <command>` when Codex is about to run the validation command itself. If a
 harness already ran the command and captured output, submit the same real
 stdout/stderr with `c2c record --type ... --stdout-file ... --stderr-file ...`.
+This record is a protocol gate: Codex MUST NOT send `STATE: EXECUTED` until
+the matching `(taskId, iteration)` execution metadata is persisted
+successfully. A persistence failure is an infrastructure/toolchain failure,
+not a completed iteration. Repeated finalization of the same task/iteration is
+idempotent and must not append duplicate records. If output is restricted by
+the sanitizer but the metadata record persisted, EXECUTED may still be sent;
+ChatGPT reviews from git.
 ChatGPT reads metadata via `execution_summary` / `test_status`. Command output
 is a separate opt-in: `execution_output` (`list` then `read`). Codex nominates
 the log; a **local sanitizer** decides whether ChatGPT may see the body

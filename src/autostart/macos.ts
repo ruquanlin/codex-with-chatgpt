@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { ensureDir } from "../config/paths.js";
+import { defaultStateDir, ensureDir } from "../config/paths.js";
 
 const SERVICE_PREFIX = "com.codex-with-chatgpt.workspace";
 
@@ -13,6 +13,7 @@ export interface MacAutostartConfig {
   nodePath?: string;
   cliPath?: string;
   homeDir?: string;
+  stateDir?: string;
 }
 
 export interface MacAutostartStatus {
@@ -70,7 +71,8 @@ export function macAutostartPlist(config: MacAutostartConfig): string {
   const workspaceRoot = path.resolve(config.workspaceRoot);
   const nodePath = path.resolve(config.nodePath ?? process.execPath);
   const cliPath = path.resolve(config.cliPath ?? defaultCliPath());
-  const stateLogDir = path.join(config.homeDir ?? os.homedir(), "Library", "Application Support", "codex-with-chatgpt", "logs");
+  const stateDir = path.resolve(config.stateDir ?? defaultStateDir(config.homeDir ?? os.homedir()));
+  const stateLogDir = path.join(stateDir, "logs");
   const stdout = path.join(stateLogDir, `autostart-${safeWorkspaceId(config.workspaceId)}.out.log`);
   const stderr = path.join(stateLogDir, `autostart-${safeWorkspaceId(config.workspaceId)}.err.log`);
   const args = [nodePath, cliPath, "start", "-w", workspaceRoot, "--json"];
@@ -88,6 +90,11 @@ ${argXml}
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>C2C_STATE_DIR</key>
+    <string>${xmlEscape(stateDir)}</string>
+  </dict>
   <key>StandardOutPath</key>
   <string>${xmlEscape(stdout)}</string>
   <key>StandardErrorPath</key>
@@ -145,7 +152,7 @@ export function enableMacAutostart(config: MacAutostartConfig): MacAutostartStat
   requireMac();
   const file = launchAgentPath(config.workspaceId, config.homeDir);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o755 });
-  ensureDir(path.join(config.homeDir ?? os.homedir(), "Library", "Application Support", "codex-with-chatgpt", "logs"));
+  ensureDir(path.join(path.resolve(config.stateDir ?? defaultStateDir(config.homeDir ?? os.homedir())), "logs"));
   fs.writeFileSync(file, macAutostartPlist(config), { mode: 0o644 });
 
   const identifier = launchAgentIdentifier(config.workspaceId);

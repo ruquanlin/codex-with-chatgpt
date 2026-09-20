@@ -50,13 +50,14 @@ export async function ensureBridge(workspaceRoot: string, opts: { port?: number 
     // Windows / filesystems without chmod semantics
   }
   const { cmd, args } = cliEntry();
+  const stateDir = getStateDir();
   const child = spawn(
     cmd,
     [...args, "serve", "--workspace", workspace.root, ...(opts.port ? ["--port", String(opts.port)] : [])],
     {
       detached: true,
       stdio: ["ignore", out, out],
-      env: { ...process.env },
+      env: { ...process.env, C2C_STATE_DIR: stateDir },
       windowsHide: true,
     }
   );
