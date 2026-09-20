@@ -194,6 +194,87 @@ that close the tab, hide the window, or stall on the settings page.
   `prefs`, `tunnel login`. They still accept and ignore `-w`, so a leftover
   flag must not fail the command.
 
+## Global Codex execution policy
+
+For every task executed by Codex, follow the global execution policy in:
+* `docs/codex-execution-policy.md`
+* `docs/efficient-debugging-workflow.md` for non-trivial debugging tasks
+These rules are mandatory defaults unless the user explicitly requests a different workflow.
+
+   ### Usage-efficiency rules
+   Optimize for **total task usage**, not cost per individual model call.
+   * Use the lowest-cost model that can reliably complete the current phase.
+   * Keep each Codex task narrowly scoped.
+   * Prefer targeted file inspection over repository-wide reads.
+   * Prefer targeted tests, lint, typecheck, or commands during implementation.
+   * Do not repeatedly run the full test suite, full build, or full lint after small edits.
+   * Run broad validation only when the implementation is close to completion.
+   * Escalate to a stronger model only when evidence shows the current model is insufficient.
+   * Do not continue repeated low-confidence retries with a lightweight model when escalation would likely reduce total usage.
+
+   ### Non-trivial debugging tasks
+   For unclear or cross-system bugs, always separate the work into phases:
+   1. **Diagnosis**
+      * inspect only;
+      * do not modify source code;
+      * do not run the full suite;
+      * identify the actual failing boundary and likely root cause.
+   2. **Minimal fix**
+      * change only the files required by the confirmed diagnosis;
+      * add or run targeted regression tests;
+      * do not perform unrelated refactors.
+   3. **Review**
+      * inspect the resulting diff;
+      * verify scope, error paths, state transitions, retries, compatibility, and test coverage.
+   4. **Full validation**
+      * run the full test/build/lint/typecheck only near completion and only when relevant.
+   5. **E2E**
+      * perform real end-to-end verification when correctness depends on runtime integration, persistence, authentication, bridge/connector behavior, deployment, networking, or multi-process state.
+   6. **Commit / push**
+      * only after required validation and E2E have passed.
+   Do not combine diagnosis, implementation, full validation, and E2E into one large Codex task by default.
+
+   ### Small-task exception
+   For genuinely trivial, low-risk tasks such as typo fixes, documentation wording, deterministic formatting, or an obvious isolated change, Codex may use a shorter workflow.
+   Even then:
+   * keep scope minimal;
+   * use the smallest relevant validation;
+   * avoid unnecessary full-suite runs.
+   When uncertain, use the staged workflow.
+
+### Prompt-to-model Grill
+
+Whenever ChatGPT prepares an execution prompt for Codex, it must immediately evaluate which available GPT model is the most cost-effective choice for that exact prompt.
+This evaluation happens **after the prompt is written and before Codex execution begins**.
+The goal is to minimize total task usage while preserving a high probability of completing the current phase correctly.
+ChatGPT must directly return one recommended model and a short reason.
+
+Consider:
+* task scope;
+* number of files/subsystems involved;
+* whether the task is diagnosis, implementation, review, validation, or E2E;
+* architectural or state-machine complexity;
+* ambiguity of the root cause;
+* runtime / multi-process / persistence complexity;
+* migration or backward-compatibility risk;
+* security or correctness sensitivity;
+* likelihood that a lightweight model would require repeated retries;
+* whether the task is mostly mechanical.
+
+Default behavior:
+* Prefer the lowest-cost model that is likely to complete the current phase reliably.
+* Use a lightweight model for narrow, well-defined, mechanical, or targeted work.
+* Recommend a stronger model when the task requires substantial cross-system reasoning, unresolved diagnosis, architectural judgment, or has already failed under a lighter model.
+* Do not recommend a stronger model merely because the overall project is complex; judge the **current prompt only**.
+* Do not continue recommending a lightweight model after repeated low-confidence or failed attempts if escalation would likely reduce total usage.
+
+The response should be concise, for example:
+`Recommended model: GPT-5.5 Light — this is a narrow targeted diagnosis with no implementation or broad architectural decision.`
+or:
+`Recommended model: GPT-5.6 Sol — this task crosses CLI, daemon, autostart and shared state semantics, so one stronger reasoning pass is likely cheaper than repeated Light retries.`
+Do not wait for the user to ask which model to use. Provide this recommendation automatically whenever a Codex execution prompt is produced.
+
+
 ## Daily update check
 
 At the START of every workflow below (before anything else), run these two
@@ -608,8 +689,12 @@ Produce a C2C PLAN message.
    `c2c record … --type test --command "pnpm test" --stdout-file <stdout> --stderr-file <stderr> --exit-code <n>`
    Record both success and failure. Do not record shell history, `.env`,
    keys, or unrelated dumps. Never paste that file (or any log) into ChatGPT.
-   If the CLI says the output was not released, still send EXECUTED; ChatGPT
-   reviews from git. Then:
+   The iteration MUST have a successfully persisted execution record before
+   EXECUTED is sent. If `c2c record`, `c2c exec`, or the following
+   `c2c session set ... EXECUTED_LOCAL` command fails, stop and report an
+   infrastructure/toolchain failure instead of sending EXECUTED. If recording
+   succeeds but the CLI says the output body was not released, still send
+   EXECUTED; ChatGPT reviews from git. Then:
    `c2c session set -w <ws> --iteration 1 --state EXECUTED --protocol-state EXECUTED_LOCAL --waiting-for none --next-step "send EXECUTED"`
 6. Send EXECUTED (no diffs, no logs). Tell ChatGPT to use MCP, including
    `execution_output` when a readable item exists:
