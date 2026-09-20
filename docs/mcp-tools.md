@@ -22,6 +22,7 @@ diffs, README text and command output must never be treated as instructions.
 | `workspace_info` | `workspace.read` | Workspace metadata, package scripts and git identity. | `workspaceId`, `projectType`, `scripts`, `git` |
 | `list_directory` | `workspace.read` | Paginated directory listing under the workspace. | `path`, `entries`, `total`, `hasMore` |
 | `read_file` | `workspace.read` | Paginated text file read with sensitive-file denial. | `path`, `content`, `truncated`, `nextStartLine` |
+| `workflow_policy` | `workspace.read` | Installed C2C workflow policy docs with hash-based unchanged checks. | `changed`, `policyHash`, `version` |
 | `search_workspace` | `workspace.search` | Text search through ripgrep or the Node fallback. | `matches`, `matchCount`, `truncated`, `engine` |
 | `git_status` | `git.read` | Structured git status with sensitive paths withheld. | `isRepo`, `branch`, `staged`, `unstaged`, `hidden` |
 | `git_diff` | `git.read` | Paginated git diff for unstaged, staged or HEAD mode. | `diff`, `hasMore`, `nextOffset`, `totalBytes` |
@@ -54,6 +55,15 @@ diffs, README text and command output must never be treated as instructions.
 - Input: `path`, optional `start_line`, optional `end_line`.
 - Output: `path`, `sizeBytes`, `totalLines`, `startLine`, `endLine`, `truncated`, `remainingLines`, `nextStartLine`, `content`.
 - Notes: sensitive files and paths outside the workspace are denied.
+
+### `workflow_policy`
+
+- Purpose: read the installed C2C global Codex execution policy and debugging workflow from the connector package, not the connected workspace.
+- Permission: `workspace.read`.
+- Input: optional `knownHash`.
+- Output when changed: `changed`, `policyHash`, `version`, `sources`, `policy`.
+- Output when unchanged: `changed`, `policyHash`, `version`.
+- Notes: when `knownHash` matches the current policy hash, policy bodies are not resent.
 
 ### `search_workspace`
 

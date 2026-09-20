@@ -59,6 +59,8 @@ beforeAll(async () => {
     })
   );
   write(root, ".env", "API_KEY=supersecret\n");
+  write(root, "docs/codex-execution-policy.md", "# Fake workspace policy\n\nThis must never be returned.\n");
+  write(root, "docs/efficient-debugging-workflow.md", "# Fake workspace workflow\n\nThis must never be returned.\n");
   // an uncommitted change so git_diff has content
   write(root, "src/index.ts", "export const answer = 43; // changed\n");
 
@@ -104,6 +106,7 @@ describe("MCP tools over Streamable HTTP", () => {
       "run_tests",
       "search_workspace",
       "test_status",
+      "workflow_policy",
       "workspace_info",
     ]);
     for (const forbidden of ["write_file", "delete_file", "execute_shell", "git_commit", "install_package"]) {
@@ -123,6 +126,56 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "run_tests", ["passed", "exitCode", "stdout", "stderr"]);
     expectToolOutputSchema(tools, "build_project", ["passed", "exitCode", "stdout", "stderr"]);
     expectToolOutputSchema(tools, "run_lint", ["passed", "exitCode", "stdout", "stderr"]);
+    expectToolOutputSchema(tools, "workflow_policy", ["changed", "policyHash", "version"]);
+  });
+
+  it("workflow_policy returns installed policy docs and supports hash-based cheap checks", async () => {
+    const first = structuredJsonOf<{
+      changed: boolean;
+      policyHash: string;
+      version: string;
+      sources: { path: string; sha256: string; sizeBytes: number }[];
+      policy: { global: string; debugging: string };
+    }>(await client.callTool({ name: "workflow_policy", arguments: {} }));
+
+    expect(first.changed).toBe(true);
+    expect(first.policyHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(first.version).toBeTruthy();
+    expect(first.sources.map((source) => source.path).sort()).toEqual([
+      "docs/codex-execution-policy.md",
+      "docs/efficient-debugging-workflow.md",
+    ]);
+    expect(first.policy.global).toContain("# Codex Execution Policy");
+    expect(first.policy.debugging).toContain("# Efficient Debugging Workflow");
+    expect(first.policy.global).not.toContain("Fake workspace policy");
+    expect(first.policy.debugging).not.toContain("Fake workspace workflow");
+
+    const unchanged = structuredJsonOf<{
+      changed: boolean;
+      policyHash: string;
+      version: string;
+      sources?: unknown;
+      policy?: unknown;
+    }>(await client.callTool({ name: "workflow_policy", arguments: { knownHash: first.policyHash } }));
+
+    expect(unchanged).toEqual({
+      changed: false,
+      policyHash: first.policyHash,
+      version: first.version,
+    });
+
+    const changed = structuredJsonOf<{
+      changed: boolean;
+      policyHash: string;
+      sources: unknown[];
+      policy: { global: string; debugging: string };
+    }>(await client.callTool({ name: "workflow_policy", arguments: { knownHash: "not-current" } }));
+
+    expect(changed.changed).toBe(true);
+    expect(changed.policyHash).toBe(first.policyHash);
+    expect(changed.sources.length).toBe(2);
+    expect(changed.policy.global).toContain("# Codex Execution Policy");
+    expect(changed.policy.debugging).toContain("# Efficient Debugging Workflow");
   });
 
   it("documents git_diff pagination with its output field names", async () => {

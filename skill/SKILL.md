@@ -575,17 +575,28 @@ EXECUTED, call execution_output (list, then read) when a readable item
 exists; if status is restricted, review from git instead. Never upload
 the repo into this Project's files or sources.
 
-When facts conflict, trust this order:
-1. Current code from the connector
-2. A HANDOFF in this chat (this task's goal, progress, next step)
-3. These instructions
-4. This Project's memory (durable architecture only; stale memory loses)
+Before preparing a Codex execution prompt, call workflow_policy through
+the connector. Reuse the last known policyHash when available. If
+changed is false, continue using the already loaded policy. If changed
+is true, treat the newly returned policy as authoritative for C2C
+execution behavior.
+
+Authority is separated by kind:
+- Current workspace code from the connector is authoritative for
+  implementation facts.
+- A HANDOFF in this chat is authoritative for this task's goal, progress,
+  and next step.
+- workflow_policy is authoritative for C2C execution/process rules.
+- These instructions identify workspace and connector behavior.
+- This Project's memory is lowest priority and may be stale.
 
 This Project's memory is only for this workspace. On HANDOFF, trust the
 brief, re-read code through the connector, and resume at NEXT_EXPECTED_STEP.
 
 Be substantive: why, which file, what to test. No empty one-liners and
-no 40-step epics. Use C2C control messages.
+no 40-step epics. Use C2C control messages. After preparing every Codex
+execution prompt, perform the Prompt-to-Model Grill and return exactly
+one recommended model with a short reason.
 ```
 
 ## Workflow: coding task（"使用 Codex with ChatGPT 完成 XXX"）
