@@ -3,9 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   ensureSandboxAllowlist,
+  hasStopHook,
   isStateDirAllowlisted,
   pathsEquivalent,
   toTomlPath,
+  upsertStopHook,
   upsertWritableRoot,
 } from "../src/config/sandbox-allow.js";
 import { makeTmpDir, cleanup } from "./helpers.js";
@@ -30,7 +32,26 @@ describe("sandbox allowlist", () => {
     const text = fs.readFileSync(configPath, "utf8");
     expect(text).toContain("[sandbox_workspace_write]");
     expect(isStateDirAllowlisted(text, stateDir)).toBe(true);
+    expect(hasStopHook(text)).toBe(true);
     cleanup(dir);
+  });
+
+  it("installs the Stop hook once without rewriting other hooks", () => {
+    const original = [
+      "[[hooks.PreToolUse]]",
+      'matcher = "Bash"',
+      "",
+      "[[hooks.PreToolUse.hooks]]",
+      'type = "command"',
+      'command = "existing-hook"',
+      "",
+    ].join("\n");
+    const once = upsertStopHook(original);
+    const twice = upsertStopHook(once);
+    expect(once).toContain('command = "existing-hook"');
+    expect(once).toContain("[[hooks.Stop]]");
+    expect(once).toContain('command = "c2c hook stop"');
+    expect(twice).toBe(once);
   });
 
   it("appends the table without rewriting existing Codex settings", () => {

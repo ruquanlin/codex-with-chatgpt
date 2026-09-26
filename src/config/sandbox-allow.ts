@@ -9,9 +9,13 @@ const KEY = "writable_roots";
 export interface SandboxAllowResult {
   added: boolean;
   alreadyAllowed: boolean;
+  hookAdded: boolean;
+  hookAlreadyInstalled: boolean;
   stateDir: string;
   configPath: string;
 }
+
+export const STOP_HOOK_COMMAND = "c2c hook stop";
 
 export function getCodexHome(): string {
   const fromEnv = process.env.CODEX_HOME?.trim();
@@ -48,7 +52,8 @@ export function isStateDirAllowlisted(content: string, stateDir: string): boolea
 }
 
 /**
- * Idempotently add the C2C state directory to Codex's sandbox writable_roots.
+ * Idempotently add the C2C state directory to Codex's sandbox writable_roots
+ * and install the read-only C2C finalization Stop hook.
  * Works on macOS, Windows, and Linux. Never rewrites unrelated config.
  */
 export function ensureSandboxAllowlist(opts?: {
@@ -61,18 +66,52 @@ export function ensureSandboxAllowlist(opts?: {
   fs.mkdirSync(path.dirname(configPath), { recursive: true, mode: 0o700 });
 
   const previous = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
-  if (isStateDirAllowlisted(previous, stateDir)) {
-    return { added: false, alreadyAllowed: true, stateDir, configPath };
+  const alreadyAllowed = isStateDirAllowlisted(previous, stateDir);
+  const hookAlreadyInstalled = hasStopHook(previous);
+  if (alreadyAllowed && hookAlreadyInstalled) {
+    return {
+      added: false,
+      alreadyAllowed: true,
+      hookAdded: false,
+      hookAlreadyInstalled: true,
+      stateDir,
+      configPath,
+    };
   }
-
-  const next = upsertWritableRoot(previous, stateDir);
+  const withRoot = upsertWritableRoot(previous, stateDir);
+  const next = upsertStopHook(withRoot);
   fs.writeFileSync(configPath, next, { encoding: "utf8", mode: 0o600 });
   try {
     fs.chmodSync(configPath, 0o600);
   } catch {
     // Windows / filesystems without chmod semantics
   }
-  return { added: true, alreadyAllowed: false, stateDir, configPath };
+  return {
+    added: !alreadyAllowed,
+    alreadyAllowed,
+    hookAdded: !hookAlreadyInstalled,
+    hookAlreadyInstalled,
+    stateDir,
+    configPath,
+  };
+}
+
+export function hasStopHook(content: string): boolean {
+  const escaped = STOP_HOOK_COMMAND.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^[ \\t]*command[ \\t]*=[ \\t]*["']${escaped}["'][ \\t]*$`, "m").test(content);
+}
+
+export function upsertStopHook(content: string): string {
+  if (hasStopHook(content)) return content;
+  const prefix = content.length === 0 ? "" : content.endsWith("\n") ? content : `${content}\n`;
+  const spacer = prefix.length === 0 || prefix.endsWith("\n\n") ? "" : "\n";
+  return (
+    `${prefix}${spacer}[[hooks.Stop]]\n` +
+    `\n[[hooks.Stop.hooks]]\n` +
+    `type = "command"\n` +
+    `command = "${STOP_HOOK_COMMAND}"\n` +
+    `timeout = 5\n`
+  );
 }
 
 export function upsertWritableRoot(content: string, stateDir: string): string {

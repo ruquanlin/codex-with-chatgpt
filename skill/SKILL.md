@@ -321,10 +321,11 @@ commands (both are cheap / cached; never mention them unless an update exists):
 
 1. `c2c update-check --json` (do not pass `-w`)
 2. `c2c sandbox-allow --json` (do not pass `-w`) — writes the C2C state directory into Codex's
-   sandbox `writable_roots` (macOS: `~/Library/Application Support/codex-with-chatgpt`;
+   sandbox `writable_roots` and installs the idempotent C2C finalization Stop hook
+   (macOS: `~/Library/Application Support/codex-with-chatgpt`;
    Windows: `%LOCALAPPDATA%\codex-with-chatgpt`; config file is
    `~/.codex/config.toml` on both, or `%USERPROFILE%\.codex\config.toml` on Windows).
-   If already allowlisted, this is a no-op and does not trigger elevation.
+   Once the allowlist and hook are installed, this is a no-op and does not trigger elevation.
 
 - `{ "updateAvailable": false }` → continue silently. Never mention the check.
 - `{ "updateAvailable": true }` → tell the user one line:
@@ -377,8 +378,8 @@ Speak only of 临时地址 / 固定域名 / 登录 Cloudflare.
 3. Run `c2c sandbox-allow --json`, then **Connection choice**, then
    `c2c setup -w <workspace> --json`.
    `sandbox-allow` edits Codex `config.toml` only — it adds C2C's state directory
-   to `[sandbox_workspace_write].writable_roots` so later chats can write logs
-   without elevation. If the write is denied, request approval and retry once.
+   to `[sandbox_workspace_write].writable_roots` and installs C2C's finalization
+   Stop hook. If the write is denied, request approval and retry once.
    → returns `{ mcpUrl, pairingCode, workspaceName, connectorName, ... }`.
    `connectorName` is this workspace's plugin title (legacy installs stay
    `Codex with ChatGPT`; additional workspaces get `Codex with ChatGPT · <name>`).

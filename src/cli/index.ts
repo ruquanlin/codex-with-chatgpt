@@ -57,6 +57,7 @@ import {
 } from "../session/state.js";
 import { appendExecutionRecord, hasExecutionRecord } from "../execution/records.js";
 import { saveExecutionOutput, type ExecutionOutputMeta } from "../execution/output.js";
+import { evaluateStopFinalization, type StopHookInput } from "../hooks/stop-finalization.js";
 import {
   disableMacAutostart,
   enableMacAutostart,
@@ -71,6 +72,13 @@ const say = (msg: string): void => {
 };
 const check = (msg: string): void => say(`✓ ${msg}`);
 const cross = (msg: string): void => say(`✗ ${msg}`);
+
+async function readStdin(): Promise<string> {
+  let value = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) value += chunk;
+  return value;
+}
 
 function resolveWorkspace(option?: string): string {
   return path.resolve(option ?? process.cwd());
@@ -915,10 +923,25 @@ program
 
 // ---------------------------------------------------------------- sandbox-allow (Codex writable_roots, macOS + Windows)
 
+const hook = program.command("hook", { hidden: true });
+
+hook
+  .command("stop", { hidden: true })
+  .description("Enforce C2C execution finalization before Codex stops")
+  .action(async () => {
+    let input: StopHookInput = {};
+    try {
+      input = JSON.parse(await readStdin()) as StopHookInput;
+    } catch {
+      // Invalid input cannot establish that this is a C2C-managed execution.
+    }
+    say(JSON.stringify(evaluateStopFinalization(input)));
+  });
+
 acceptUnusedWorkspaceOption(
   program
     .command("sandbox-allow")
-    .description("Add the local settings directory to the Codex sandbox allowlist")
+    .description("Configure Codex sandbox access and the C2C finalization hook")
     .option("--json", "machine-readable output", false)
 )
   .action((opts: { json: boolean }) => {
