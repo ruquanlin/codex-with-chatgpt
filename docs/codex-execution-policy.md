@@ -37,6 +37,36 @@ Optimize for **total task cost**, not the nominal cost of a single model call.
 
 A cheaper model is not cheaper overall if it causes repeated failed attempts, broad re-reading, unnecessary validation, or repeated rewrites.
 
+## 2A. Mandatory Jev Decision Gate
+
+Jev is a mandatory pre-Codex decision gate for debugging work that risks
+becoming speculative, repetitive, or wasteful.
+
+Do **not** call Jev for ordinary, well-scoped, deterministic tasks.
+
+Jev **must** be called before creating or sending another Codex task when any
+of these conditions applies:
+
+- the issue is a difficult or unclear bug;
+- the issue is a production/runtime incident;
+- at least one diagnosis/investigation round has already completed and another
+  diagnosis, repair, or follow-up Codex round is being considered;
+- the current investigation is repeating similar checks without materially
+  reducing uncertainty.
+
+The `jev_decision_gate` result controls the next step:
+
+- `proceed`: Codex may continue with the proposed task;
+- `reframe`: do not send the current task. Narrow or change the task using the
+  evidence, then run the gate again before Codex;
+- `stop`: do not create another Codex task for the current line of investigation;
+- `available: false`: do not silently bypass the gate. Report that Jev is
+  unavailable and stop automatic continuation. Proceed without Jev only when
+  the user explicitly instructs C2C to bypass the gate.
+
+This rule is mandatory even when another workflow rule would otherwise suggest
+continuing diagnosis, escalating model strength, or attempting another fix.
+
 ---
 
 ## 2. Scope Before Execution

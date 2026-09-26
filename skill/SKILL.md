@@ -201,6 +201,29 @@ For every task executed by Codex, follow the global execution policy in:
 * `docs/efficient-debugging-workflow.md` for non-trivial debugging tasks
 These rules are mandatory defaults unless the user explicitly requests a different workflow.
 
+### Mandatory Jev decision gate
+
+Jev is the strict pre-Codex referee for debugging work that risks becoming
+speculative or repetitive. Do not use it for ordinary well-scoped deterministic
+tasks.
+
+Before ChatGPT creates or sends another Codex task, it MUST call
+`jev_decision_gate` if any of these conditions applies:
+* the issue is a difficult or unclear bug;
+* the issue is a production/runtime incident;
+* at least one diagnosis/investigation round has completed and another Codex
+  diagnosis, repair, or follow-up round is being considered;
+* similar checks are being repeated without materially reducing uncertainty.
+
+The gate result is binding:
+* `proceed` — Codex may continue with the proposed task;
+* `reframe` — do not send the current task; narrow/change it and run Jev again;
+* `stop` — stop creating Codex tasks for the current line of investigation;
+* `available: false` — do not silently bypass Jev. Report the unavailable gate
+  and stop automatic continuation. Only an explicit user instruction may bypass
+  the gate.
+
+
    ### Usage-efficiency rules
    Optimize for **total task usage**, not cost per individual model call.
    * Use the lowest-cost model that can reliably complete the current phase.

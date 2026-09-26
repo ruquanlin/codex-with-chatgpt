@@ -100,6 +100,7 @@ describe("MCP tools over Streamable HTTP", () => {
       "execution_summary",
       "git_diff",
       "git_status",
+      "jev_decision_gate",
       "list_directory",
       "read_file",
       "run_lint",
@@ -126,6 +127,7 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "run_tests", ["passed", "exitCode", "stdout", "stderr"]);
     expectToolOutputSchema(tools, "build_project", ["passed", "exitCode", "stdout", "stderr"]);
     expectToolOutputSchema(tools, "run_lint", ["passed", "exitCode", "stdout", "stderr"]);
+    expectToolOutputSchema(tools, "jev_decision_gate", ["available", "decision", "confidence", "probabilities"]);
     expectToolOutputSchema(tools, "workflow_policy", ["changed", "policyHash", "version"]);
   });
 
