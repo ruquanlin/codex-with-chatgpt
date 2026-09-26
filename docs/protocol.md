@@ -5,6 +5,19 @@ Data plane: MCP (ChatGPT pulls files, diffs, search results itself).
 
 Never mix the two: control messages carry state, never content.
 
+## Prompt vs Protocol Envelope
+
+The task prompt describes the concrete work Codex should perform. The C2C
+protocol envelope owns execution reporting and finalization for every
+C2C-managed iteration.
+
+ChatGPT-generated Codex prompts do not need to repeat the reporting or
+finalization requirement. Regardless of prompt wording, Codex must persist the
+matching `(taskId, iteration)` execution metadata through the existing
+`c2c record` or `c2c exec` path before the iteration is complete or
+`STATE: EXECUTED` is sent. This remains backward-compatible with existing
+EXECUTED, checkpoint, and execution-summary semantics.
+
 ## States
 
 ```

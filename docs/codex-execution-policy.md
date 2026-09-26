@@ -37,6 +37,45 @@ Optimize for **total task cost**, not the nominal cost of a single model call.
 
 A cheaper model is not cheaper overall if it causes repeated failed attempts, broad re-reading, unnecessary validation, or repeated rewrites.
 
+## 1A. Mandatory Preflight Contract
+
+Before planning, generating a Codex prompt, or executing a C2C task:
+
+1. **Verify first** — distinguish verified facts from assumptions and unknowns. “It runs” does not mean “it is verified”.
+
+2. **One problem at a time** — do not advance to another layer until the current problem passes its acceptance criteria.
+
+3. **Minimal action** — choose the smallest action that can verify or resolve the current problem.
+
+4. **Short Codex prompts** — include only information Codex needs and cannot obtain itself. Do not repeat rules already defined in workflow policy or skills.
+
+5. **Acceptance gate** — define the observable PASS condition before execution. No PASS means no progression to the next layer.
+
+6. **Cost / risk gate** — require stronger evidence before quota-consuming, production, commit/push, destructive, or otherwise costly actions.
+
+If any preflight condition is not satisfied, STOP or REFRAME instead of continuing execution.
+
+---
+
+## 2. Global Execution-Record Invariant
+
+Every C2C-managed Codex task has a mandatory execution-record invariant:
+execution reporting and finalization are part of the C2C execution contract,
+not optional wording that each individual task prompt must repeat.
+
+This invariant applies to every C2C-managed iteration, including
+diagnosis-only, implementation, review, documentation, validation-only,
+no-change, and `changedFiles=0` tasks. A C2C-managed iteration must not be
+considered complete until the matching `(taskId, iteration)` execution
+metadata is successfully persisted through the existing `c2c record` or
+`c2c exec` path.
+
+If persistence fails, the iteration is an infrastructure/toolchain failure,
+not a completed task. Duplicate finalization for the same task and iteration
+remains idempotent, and persisted metadata remains readable through
+`execution_summary` / `test_status`; command output remains the separate
+`execution_output` path when applicable.
+
 ## 2A. Mandatory Jev Decision Gate
 
 Jev is a mandatory pre-Codex decision gate for debugging work that risks
@@ -69,7 +108,7 @@ continuing diagnosis, escalating model strength, or attempting another fix.
 
 ---
 
-## 2. Scope Before Execution
+## 3. Scope Before Execution
 
 Before Codex starts substantial work, the task should be reduced to the smallest useful scope.
 
@@ -94,7 +133,7 @@ Prefer narrow, explicit tasks with clear success criteria.
 
 ---
 
-## 3. Model Selection
+## 4. Model Selection
 
 Use the most economical model that can reliably perform the current phase.
 
@@ -129,7 +168,7 @@ Do not keep using a lightweight model indefinitely when it is clearly causing re
 
 ---
 
-## 4. Separate Diagnosis From Implementation
+## 5. Separate Diagnosis From Implementation
 
 For non-trivial bugs or unclear failures:
 
@@ -152,7 +191,7 @@ For detailed debugging behavior, follow:
 
 ---
 
-## 5. Prefer Targeted Repository Inspection
+## 6. Prefer Targeted Repository Inspection
 
 Codex should minimize repository-wide reads.
 
@@ -176,7 +215,7 @@ Use existing task context whenever it remains valid.
 
 ---
 
-## 6. Minimal Change Principle
+## 7. Minimal Change Principle
 
 Codex should make the smallest change that satisfies the task.
 
@@ -193,7 +232,7 @@ If a broader refactor would be beneficial but is not required, report it separat
 
 ---
 
-## 7. Validation Strategy
+## 8. Validation Strategy
 
 Validation should grow in breadth only as the task approaches completion.
 
@@ -224,7 +263,7 @@ Do not repeatedly run expensive full validation after every small edit.
 
 ---
 
-## 8. E2E Verification
+## 9. E2E Verification
 
 E2E verification is required when correctness depends on real runtime integration.
 
@@ -251,7 +290,7 @@ The E2E check must verify behavior from the consumer side whenever possible.
 
 ---
 
-## 9. Avoid Repeated Full-Suite Runs
+## 10. Avoid Repeated Full-Suite Runs
 
 Full validation is expensive.
 
@@ -265,7 +304,7 @@ Do not run the full suite just because a task contains the word "fix".
 
 ---
 
-## 10. Execution Reports
+## 11. Execution Reports
 
 Codex reports should be concise and useful.
 
@@ -286,7 +325,7 @@ Avoid dumping full command logs unless specifically needed.
 
 ---
 
-## 11. Do Not Commit or Push Prematurely
+## 12. Do Not Commit or Push Prematurely
 
 Unless explicitly requested otherwise:
 
@@ -308,7 +347,7 @@ Before commit:
 
 ---
 
-## 12. Existing Unrelated Changes
+## 13. Existing Unrelated Changes
 
 If the working tree already contains unrelated modifications:
 
@@ -321,7 +360,7 @@ When validation fails because of unrelated existing issues, report that fact and
 
 ---
 
-## 13. Stop Conditions
+## 14. Stop Conditions
 
 Codex should stop and report rather than continue consuming resources when:
 
@@ -335,7 +374,7 @@ At that point, report the exact blocker and the next most efficient step.
 
 ---
 
-## 14. Escalation Policy
+## 15. Escalation Policy
 
 Escalation must be evidence-based.
 
@@ -351,7 +390,7 @@ Do not escalate model strength and validation breadth at the same time unless ne
 
 ---
 
-## 15. Task-Type Defaults
+## 16. Task-Type Defaults
 
 ### Bug Fix
 
@@ -416,7 +455,7 @@ Use:
 
 ---
 
-## 16. Default Instruction for All Codex Tasks
+## 17. Default Instruction for All Codex Tasks
 
 Unless the user explicitly requests a different process, Codex should follow this rule:
 
@@ -432,7 +471,7 @@ Unless the user explicitly requests a different process, Codex should follow thi
 
 ---
 
-## 17. Relationship to Other C2C Documentation
+## 18. Relationship to Other C2C Documentation
 
 This policy applies globally to all Codex execution.
 

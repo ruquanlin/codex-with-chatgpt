@@ -51,13 +51,13 @@ function withRecordEnvironment(run: (root: string, workspace: Workspace) => void
 }
 
 describe("c2c record", () => {
-  it("creates exactly one metadata record for a successful iteration without validation", () => {
+  it("creates exactly one metadata record for a no-change iteration without validation", () => {
     withRecordEnvironment((root, workspace) => {
       const first = runRecord(root, [
         "--iteration",
         "1",
         "--changed-files",
-        "src/a.ts,src/b.ts",
+        "0",
         "--tests",
         "not run",
         "--exit-status",
@@ -67,7 +67,7 @@ describe("c2c record", () => {
         "--iteration",
         "1",
         "--changed-files",
-        "src/a.ts,src/b.ts",
+        "0",
         "--tests",
         "not run",
         "--exit-status",
@@ -80,7 +80,7 @@ describe("c2c record", () => {
         expect.objectContaining({
           taskId: "c2c_test",
           iteration: 1,
-          changedFiles: ["src/a.ts", "src/b.ts"],
+          changedFiles: 0,
           tests: "not run",
           exitStatus: "ok",
         }),

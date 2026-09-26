@@ -201,6 +201,22 @@ For every task executed by Codex, follow the global execution policy in:
 * `docs/efficient-debugging-workflow.md` for non-trivial debugging tasks
 These rules are mandatory defaults unless the user explicitly requests a different workflow.
 
+### Global C2C execution-record invariant
+
+For every C2C-managed Codex task, execution reporting and finalization are
+part of the C2C execution contract. Apply this automatically whenever
+operating under the C2C Skill, even when the concrete task prompt contains no
+wording about reporting, finalization, or execution records.
+
+This applies to every C2C-managed iteration, including diagnosis-only,
+implementation, review, documentation, validation-only, no-change, and
+`changedFiles=0` tasks. The iteration is not complete until the matching
+`(taskId, iteration)` execution metadata is successfully persisted through the
+existing `c2c record` or `c2c exec` path. Keep the existing EXECUTED guard
+semantics: do not send `STATE: EXECUTED`, and do not mark
+`EXECUTED_LOCAL` / `EXECUTED_SENT`, unless the matching record exists.
+Duplicate finalization remains idempotent.
+
 ### Mandatory Jev decision gate
 
 Jev is the strict pre-Codex referee for debugging work that risks becoming
@@ -707,7 +723,8 @@ Produce a C2C PLAN message.
    ChatGPT does not micro-manage tool calls).
    Before you start:
    `c2c session set -w <ws> --protocol-state EXECUTING --waiting-for none --next-step "finish PLAN then record"`
-5. Record the execution so ChatGPT can read it via MCP. For validation
+5. Apply the global C2C execution-record invariant above so ChatGPT can read
+   the iteration via MCP. For validation
    commands, prefer wrapping the real command so stdout/stderr and the exit
    code are captured directly:
    `c2c exec -w <ws> --type test --task c2c_f81a --iteration 1 --changed-files "src/a.ts,src/b.ts" -- pnpm test`
@@ -723,8 +740,9 @@ Produce a C2C PLAN message.
    `c2c record … --type test --command "pnpm test" --stdout-file <stdout> --stderr-file <stderr> --exit-code <n>`
    Record both success and failure. Do not record shell history, `.env`,
    keys, or unrelated dumps. Never paste that file (or any log) into ChatGPT.
-   The iteration MUST have a successfully persisted execution record before
-   EXECUTED is sent. If `c2c record`, `c2c exec`, or the following
+   Because this is the global C2C execution-record invariant, it applies even
+   to diagnosis-only, no-change, validation-only, and `changedFiles=0`
+   iterations. If `c2c record`, `c2c exec`, or the following
    `c2c session set ... EXECUTED_LOCAL` command fails, stop and report an
    infrastructure/toolchain failure instead of sending EXECUTED. If recording
    succeeds but the CLI says the output body was not released, still send
