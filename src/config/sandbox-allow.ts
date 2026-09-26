@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { packageRoot } from "./package-root.js";
 import { getStateDir } from "./paths.js";
 
 const TABLE = "sandbox_workspace_write";
@@ -15,7 +16,16 @@ export interface SandboxAllowResult {
   configPath: string;
 }
 
-export const STOP_HOOK_COMMAND = "c2c hook stop";
+/**
+ * Codex may not inherit the user's PATH when it runs hooks. Resolve the
+ * packaged entry point explicitly so hooks work for local and global installs.
+ */
+export const C2C_CLI_ENTRY = path.resolve(packageRoot(), "bin", "c2c.js");
+const hookCommand = (hook: string): string => `${quoteCommandArg(process.execPath)} ${quoteCommandArg(C2C_CLI_ENTRY)} hook ${hook}`;
+export const STOP_HOOK_COMMAND = hookCommand("stop");
+export const USER_PROMPT_SUBMIT_HOOK_COMMAND = hookCommand("user-prompt-submit");
+const LEGACY_STOP_HOOK_COMMAND = "c2c hook stop";
+const LEGACY_USER_PROMPT_SUBMIT_HOOK_COMMAND = "c2c hook user-prompt-submit";
 
 export function getCodexHome(): string {
   const fromEnv = process.env.CODEX_HOME?.trim();
@@ -53,7 +63,7 @@ export function isStateDirAllowlisted(content: string, stateDir: string): boolea
 
 /**
  * Idempotently add the C2C state directory to Codex's sandbox writable_roots
- * and install the read-only C2C finalization Stop hook.
+ * and install the C2C UserPromptSubmit enrollment and finalization Stop hooks.
  * Works on macOS, Windows, and Linux. Never rewrites unrelated config.
  */
 export function ensureSandboxAllowlist(opts?: {
@@ -68,7 +78,8 @@ export function ensureSandboxAllowlist(opts?: {
   const previous = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
   const alreadyAllowed = isStateDirAllowlisted(previous, stateDir);
   const hookAlreadyInstalled = hasStopHook(previous);
-  if (alreadyAllowed && hookAlreadyInstalled) {
+  const userPromptHookAlreadyInstalled = hasUserPromptSubmitHook(previous);
+  if (alreadyAllowed && hookAlreadyInstalled && userPromptHookAlreadyInstalled) {
     return {
       added: false,
       alreadyAllowed: true,
@@ -79,7 +90,7 @@ export function ensureSandboxAllowlist(opts?: {
     };
   }
   const withRoot = upsertWritableRoot(previous, stateDir);
-  const next = upsertStopHook(withRoot);
+  const next = upsertUserPromptSubmitHook(upsertStopHook(withRoot));
   fs.writeFileSync(configPath, next, { encoding: "utf8", mode: 0o600 });
   try {
     fs.chmodSync(configPath, 0o600);
@@ -97,11 +108,31 @@ export function ensureSandboxAllowlist(opts?: {
 }
 
 export function hasStopHook(content: string): boolean {
-  const escaped = STOP_HOOK_COMMAND.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = tomlHookCommand(STOP_HOOK_COMMAND).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`^[ \\t]*command[ \\t]*=[ \\t]*["']${escaped}["'][ \\t]*$`, "m").test(content);
 }
 
+export function hasUserPromptSubmitHook(content: string): boolean {
+  const escaped = tomlHookCommand(USER_PROMPT_SUBMIT_HOOK_COMMAND).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^[ \\t]*command[ \\t]*=[ \\t]*["']${escaped}["'][ \\t]*$`, "m").test(content);
+}
+
+export function upsertUserPromptSubmitHook(content: string): string {
+  if (content.includes(`command = "${LEGACY_USER_PROMPT_SUBMIT_HOOK_COMMAND}"`)) {
+    return content.replace(
+      `command = "${LEGACY_USER_PROMPT_SUBMIT_HOOK_COMMAND}"`,
+      `command = "${tomlHookCommand(USER_PROMPT_SUBMIT_HOOK_COMMAND)}"`
+    );
+  }
+  if (hasUserPromptSubmitHook(content)) return content;
+  const prefix = content.length === 0 ? "" : content.endsWith("\n") ? content : `${content}\n`;
+  return `${prefix}\n[[hooks.UserPromptSubmit]]\n\n[[hooks.UserPromptSubmit.hooks]]\ntype = "command"\ncommand = "${tomlHookCommand(USER_PROMPT_SUBMIT_HOOK_COMMAND)}"\ntimeout = 5\n`;
+}
+
 export function upsertStopHook(content: string): string {
+  if (content.includes(`command = "${LEGACY_STOP_HOOK_COMMAND}"`)) {
+    return content.replace(`command = "${LEGACY_STOP_HOOK_COMMAND}"`, `command = "${tomlHookCommand(STOP_HOOK_COMMAND)}"`);
+  }
   if (hasStopHook(content)) return content;
   const prefix = content.length === 0 ? "" : content.endsWith("\n") ? content : `${content}\n`;
   const spacer = prefix.length === 0 || prefix.endsWith("\n\n") ? "" : "\n";
@@ -109,7 +140,7 @@ export function upsertStopHook(content: string): string {
     `${prefix}${spacer}[[hooks.Stop]]\n` +
     `\n[[hooks.Stop.hooks]]\n` +
     `type = "command"\n` +
-    `command = "${STOP_HOOK_COMMAND}"\n` +
+    `command = "${tomlHookCommand(STOP_HOOK_COMMAND)}"\n` +
     `timeout = 5\n`
   );
 }
@@ -154,6 +185,15 @@ function isWindowsStyle(p: string): boolean {
 
 function escapeTomlString(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function quoteCommandArg(value: string): string {
+  // Forward slashes are valid on Windows and avoid TOML basic-string escapes.
+  return `"${toTomlPath(value).replace(/"/g, '\\"')}"`;
+}
+
+function tomlHookCommand(command: string): string {
+  return escapeTomlString(command);
 }
 
 function findTable(content: string, name: string): { start: number; end: number; body: string } | null {

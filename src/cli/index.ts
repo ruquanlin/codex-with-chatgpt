@@ -58,6 +58,7 @@ import {
 import { appendExecutionRecord, hasExecutionRecord } from "../execution/records.js";
 import { saveExecutionOutput, type ExecutionOutputMeta } from "../execution/output.js";
 import { evaluateStopFinalization, type StopHookInput } from "../hooks/stop-finalization.js";
+import { enrollUserPrompt, type UserPromptSubmitInput } from "../hooks/user-prompt-submit.js";
 import {
   disableMacAutostart,
   enableMacAutostart,
@@ -936,6 +937,15 @@ hook
       // Invalid input cannot establish that this is a C2C-managed execution.
     }
     say(JSON.stringify(evaluateStopFinalization(input)));
+  });
+
+hook
+  .command("user-prompt-submit", { hidden: true })
+  .description("Enroll C2C-connected prompts before execution")
+  .action(async () => {
+    let input: UserPromptSubmitInput = {};
+    try { input = JSON.parse(await readStdin()) as UserPromptSubmitInput; } catch { /* fail closed */ }
+    say(JSON.stringify(enrollUserPrompt(input)));
   });
 
 acceptUnusedWorkspaceOption(
