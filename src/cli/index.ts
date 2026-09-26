@@ -1114,8 +1114,8 @@ session
         throw new Error(`waiting-for must be one of ${WAITING_FOR.join(", ")}`);
       }
       const parsedIteration = opts.iteration ? parseInt(opts.iteration, 10) : undefined;
+      const previous = readSession(workspace.id);
       if (isExecutedState(opts.state) || isExecutedCheckpoint(protocolRaw as ProtocolState | undefined)) {
-        const previous = readSession(workspace.id);
         assertExecutionRecordPersisted(
           workspace,
           opts.task ?? previous?.taskId ?? previous?.checkpoint?.taskId,
@@ -1141,6 +1141,12 @@ session
               knownIssues: opts.knownIssues,
               nextExpectedStep: opts.nextStep,
             }
+          : opts.task && !opts.clearCheckpoint && !previous?.checkpoint
+            ? {
+                protocolState: "EXECUTING",
+                waitingFor: "none",
+                originalGoal: opts.goal,
+              }
           : undefined,
       });
       writeSession(workspace.id, saved);

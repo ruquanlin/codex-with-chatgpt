@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { listExecutionOutputs } from "../src/execution/output.js";
 import { appendExecutionRecord, readExecutionRecords, type ExecutionRecord } from "../src/execution/records.js";
 import { Workspace } from "../src/workspace/manager.js";
+import { readSession } from "../src/session/state.js";
 import { cleanup, makeTmpDir } from "./helpers.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -51,6 +52,19 @@ function withRecordEnvironment(run: (root: string, workspace: Workspace) => void
 }
 
 describe("c2c record", () => {
+  it("creates the active checkpoint when a managed task enters through session set", () => {
+    withRecordEnvironment((root, workspace) => {
+      const result = runSessionSet(root, ["--task", "c2c_entry", "--iteration", "4"]);
+      expect(result.status).toBe(0);
+      expect(readSession(workspace.id)?.checkpoint).toMatchObject({
+        taskId: "c2c_entry",
+        iteration: 4,
+        protocolState: "EXECUTING",
+        waitingFor: "none",
+      });
+    });
+  });
+
   it("creates exactly one metadata record for a no-change iteration without validation", () => {
     withRecordEnvironment((root, workspace) => {
       const first = runRecord(root, [
