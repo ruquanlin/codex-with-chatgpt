@@ -55,6 +55,30 @@ Before planning, generating a Codex prompt, or executing a C2C task:
 
 If any preflight condition is not satisfied, STOP or REFRAME instead of continuing execution.
 
+## 1B. Mandatory Codex Prompt Generation Contract
+
+Every generated Codex prompt must use the narrowest viable scope first and the
+following minimal Markdown structure:
+
+### Task
+
+State the single requested outcome and the specific files, symbols, or boundary
+that are in scope. Include only task-specific context that Codex cannot obtain
+itself. Do not duplicate C2C policy or skill instructions.
+
+### Boundaries
+
+State explicit non-goals when they prevent likely scope expansion. Keep this
+section limited to constraints that materially affect the requested task.
+
+### Validate
+
+State the focused validation that is sufficient by default for this scope. Add
+broader validation only when the task or evidence requires it.
+
+The prompt must not broaden the task merely to make the structure look
+complete. If a section has no meaningful task-specific content, omit it.
+
 ---
 
 ## 2. Global Execution-Record Invariant
