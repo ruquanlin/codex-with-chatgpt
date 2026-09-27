@@ -79,6 +79,14 @@ broader validation only when the task or evidence requires it.
 The prompt must not broaden the task merely to make the structure look
 complete. If a section has no meaningful task-specific content, omit it.
 
+### Minimal Completion Output
+
+Completion instructions must require output limited to the completion result,
+validation performed, blockers, and material caveats. Do not restate the
+prompt or add redundant narrative. Use compact structured output when it makes
+the result easier to scan. Require JSON only when a downstream consumer needs
+machine parsing.
+
 ---
 
 ## 2. Global Execution-Record Invariant
