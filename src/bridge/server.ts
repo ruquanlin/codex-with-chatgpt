@@ -1,6 +1,7 @@
 import express, { type Request, type Response, type NextFunction } from "express";
 import type { Server } from "node:http";
 import { randomBytes } from "node:crypto";
+import path from "node:path";
 import { Workspace } from "../workspace/manager.js";
 import { AuthStore } from "../auth/store.js";
 import { createOAuthRouter } from "../auth/oauth.js";
@@ -13,7 +14,7 @@ import { CloudflaredNamedTunnel } from "../tunnel/cloudflared-named.js";
 import type { TunnelProvider } from "../tunnel/provider.js";
 import { namedTunnelBinding, readTunnelState } from "../tunnel/state.js";
 import { Logger, nullLogger } from "../logger/index.js";
-import { DEFAULT_HOST, DEFAULT_PORT, getStateDir } from "../config/paths.js";
+import { DEFAULT_HOST, DEFAULT_PORT, getStateDir, readJsonIfExists } from "../config/paths.js";
 import { SERVICE_NAME, VERSION } from "../version.js";
 import { writeRuntimeState, clearRuntimeState, type RuntimeState } from "./runtime.js";
 
@@ -27,6 +28,13 @@ function tunnelForWorkspace(workspaceId: string, logger: Logger): TunnelProvider
     });
   }
   return new CloudflaredQuickTunnel(logger);
+}
+
+function readTypesafeApiKey(): string | undefined {
+  const fromEnv = process.env.TYPESAFE_API_KEY?.trim();
+  if (fromEnv) return fromEnv;
+  const stored = readJsonIfExists<{ apiKey?: unknown }>(path.join(getStateDir(), "secrets", "typesafe.json"));
+  return typeof stored?.apiKey === "string" && stored.apiKey.trim() ? stored.apiKey.trim() : undefined;
 }
 
 export interface BridgeOptions {
@@ -114,6 +122,49 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
     res.json({ service: SERVICE_NAME, version: VERSION, workspaceId: workspace.id, status: "ok" });
   });
 
+  // Local Jev adapter: keep the TypeSafe credential and upstream details on
+  // the bridge, while preserving the payload expected by the existing client.
+  app.post("/ask", express.json({ limit: "1mb" }), async (req: Request, res: Response) => {
+    const apiKey = readTypesafeApiKey();
+    if (!apiKey) {
+      res.status(503).json({ error: "typesafe_api_key_missing" });
+      return;
+    }
+
+    const body = req.body as Record<string, unknown> | null;
+    if (!body || typeof body !== "object") {
+      res.status(400).json({ error: "invalid_request" });
+      return;
+    }
+
+    try {
+      const upstream = await fetch("https://api.typesafe.ai/v1/systemone", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "jev-latest",
+          state: body.context,
+          questions: {
+            gate: {
+              type: "choice",
+              instructions: body.question,
+              criteria: body.choices,
+            },
+          },
+        }),
+      });
+      const contentType = upstream.headers.get("content-type");
+      if (contentType) res.setHeader("content-type", contentType);
+      res.status(upstream.status).send(Buffer.from(await upstream.arrayBuffer()));
+    } catch (error) {
+      logger.error(`TypeSafe Jev request failed: ${error instanceof Error ? error.message : String(error)}`);
+      res.status(502).json({ error: "typesafe_request_failed" });
+    }
+  });
+
   // ---- OAuth + discovery ---------------------------------------------------
 
   app.use(
@@ -128,7 +179,10 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
 
   // ---- MCP endpoint (bearer-protected) --------------------------------------
 
-  const mcpHandler = createMcpHttpHandler(() => createMcpServer({ workspace, logger }), logger);
+  const mcpHandler = createMcpHttpHandler(
+    () => createMcpServer({ workspace, logger, jevEndpoint: `http://${host}:${port}/ask` }),
+    logger
+  );
   app.all(
     "/mcp",
     express.json({ limit: "8mb" }),

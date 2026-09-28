@@ -249,6 +249,7 @@ const jevDecisionGateOutputSchema = {
 export interface McpContext {
   workspace: Workspace;
   logger: Logger;
+  jevEndpoint?: string;
 }
 
 export function createMcpServer(ctx: McpContext): McpServer {
@@ -279,11 +280,14 @@ export function createMcpServer(ctx: McpContext): McpServer {
       const denied = requireScope(extra.authInfo, "workspace.read");
       if (denied) return denied;
       try {
-        return okStructured(await runJevDecisionGate({
-          task: args.task,
-          evidence: args.evidence,
-          attempts: args.attempts,
-        }));
+        return okStructured(await runJevDecisionGate(
+          {
+            task: args.task,
+            evidence: args.evidence,
+            attempts: args.attempts,
+          },
+          ctx.jevEndpoint ? { endpoint: ctx.jevEndpoint } : {}
+        ));
       } catch (error) {
         return okStructured({
           available: false,
