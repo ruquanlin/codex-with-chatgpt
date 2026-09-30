@@ -281,39 +281,6 @@ The gate result is binding:
    * avoid unnecessary full-suite runs.
    When uncertain, use the staged workflow.
 
-### Prompt-to-model Grill
-
-Whenever ChatGPT prepares an execution prompt for Codex, it must immediately evaluate which available GPT model is the most cost-effective choice for that exact prompt.
-This evaluation happens **after the prompt is written and before Codex execution begins**.
-The goal is to minimize total task usage while preserving a high probability of completing the current phase correctly.
-ChatGPT must directly return one recommended model and a short reason.
-
-Consider:
-* task scope;
-* number of files/subsystems involved;
-* whether the task is diagnosis, implementation, review, validation, or E2E;
-* architectural or state-machine complexity;
-* ambiguity of the root cause;
-* runtime / multi-process / persistence complexity;
-* migration or backward-compatibility risk;
-* security or correctness sensitivity;
-* likelihood that a lightweight model would require repeated retries;
-* whether the task is mostly mechanical.
-
-Default behavior:
-* Prefer the lowest-cost model that is likely to complete the current phase reliably.
-* Use a lightweight model for narrow, well-defined, mechanical, or targeted work.
-* Recommend a stronger model when the task requires substantial cross-system reasoning, unresolved diagnosis, architectural judgment, or has already failed under a lighter model.
-* Do not recommend a stronger model merely because the overall project is complex; judge the **current prompt only**.
-* Do not continue recommending a lightweight model after repeated low-confidence or failed attempts if escalation would likely reduce total usage.
-
-The response should be concise, for example:
-`Recommended model: GPT-5.5 Light — this is a narrow targeted diagnosis with no implementation or broad architectural decision.`
-or:
-`Recommended model: GPT-5.6 Sol — this task crosses CLI, daemon, autostart and shared state semantics, so one stronger reasoning pass is likely cheaper than repeated Light retries.`
-Do not wait for the user to ask which model to use. Provide this recommendation automatically whenever a Codex execution prompt is produced.
-
-
 ## Daily update check
 
 At the START of every workflow below (before anything else), run these two
@@ -634,9 +601,7 @@ This Project's memory is only for this workspace. On HANDOFF, trust the
 brief, re-read code through the connector, and resume at NEXT_EXPECTED_STEP.
 
 Be substantive: why, which file, what to test. No empty one-liners and
-no 40-step epics. Use C2C control messages. After preparing every Codex
-execution prompt, perform the Prompt-to-Model Grill and return exactly
-one recommended model with a short reason.
+no 40-step epics. Use C2C control messages.
 ```
 
 ## Workflow: coding task（"使用 Codex with ChatGPT 完成 XXX"）

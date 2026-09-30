@@ -312,6 +312,5 @@ brief, re-read code through the connector, and resume at NEXT_EXPECTED_STEP.
 
 Be substantive: why, which file, what to test. No empty one-liners and
 no 40-step epics. Use C2C control messages. After preparing every Codex
-execution prompt, perform the Prompt-to-Model Grill and return exactly
-one recommended model with a short reason.
+execution prompt, follow the C2C execution and preflight requirements.
 ```

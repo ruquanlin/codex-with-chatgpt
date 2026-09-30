@@ -39,7 +39,7 @@ A cheaper model is not cheaper overall if it causes repeated failed attempts, br
 
 ## 1A. Mandatory Preflight Contract
 
-Before planning, generating a Codex prompt, or executing a C2C task:
+Before planning or executing a C2C task:
 
 1. **Verify first** — distinguish verified facts from assumptions and unknowns. “It runs” does not mean “it is verified”.
 
@@ -47,45 +47,13 @@ Before planning, generating a Codex prompt, or executing a C2C task:
 
 3. **Minimal action** — choose the smallest action that can verify or resolve the current problem.
 
-4. **Short Codex prompts** — include only information Codex needs and cannot obtain itself. Do not repeat rules already defined in workflow policy or skills.
+4. **C2C execution and preflight** — verify relevant facts, define an acceptance gate, and keep each execution action within the agreed task scope.
 
 5. **Acceptance gate** — define the observable PASS condition before execution. No PASS means no progression to the next layer.
 
 6. **Cost / risk gate** — require stronger evidence before quota-consuming, production, commit/push, destructive, or otherwise costly actions.
 
 If any preflight condition is not satisfied, STOP or REFRAME instead of continuing execution.
-
-## 1B. Mandatory Codex Prompt Generation Contract
-
-Every generated Codex prompt must use the narrowest viable scope first and the
-following minimal Markdown structure:
-
-### Task
-
-State the single requested outcome and the specific files, symbols, or boundary
-that are in scope. Include only task-specific context that Codex cannot obtain
-itself. Do not duplicate C2C policy or skill instructions.
-
-### Boundaries
-
-State explicit non-goals when they prevent likely scope expansion. Keep this
-section limited to constraints that materially affect the requested task.
-
-### Validate
-
-State the focused validation that is sufficient by default for this scope. Add
-broader validation only when the task or evidence requires it.
-
-The prompt must not broaden the task merely to make the structure look
-complete. If a section has no meaningful task-specific content, omit it.
-
-### Minimal Completion Output
-
-Completion instructions must require output limited to the completion result,
-validation performed, blockers, and material caveats. Do not restate the
-prompt or add redundant narrative. Use compact structured output when it makes
-the result easier to scan. Require JSON only when a downstream consumer needs
-machine parsing.
 
 ---
 
