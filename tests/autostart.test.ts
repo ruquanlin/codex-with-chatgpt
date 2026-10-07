@@ -53,9 +53,8 @@ describe("macOS autostart", () => {
 
       expect(plist).toContain("<string>com.codex-with-chatgpt.workspace.abc123</string>");
       expect(plist).toContain("<string>/opt/node &amp; bin/node</string>");
-      expect(plist).toContain("<string>start</string>");
+      expect(plist).toContain("<string>autostart-run</string>");
       expect(plist).toContain("<string>-w</string>");
-      expect(plist).toContain("<string>--json</string>");
       expect(plist).toContain("<key>EnvironmentVariables</key>");
       expect(plist).toContain("<key>C2C_STATE_DIR</key>");
       expect(plist).toContain(`<string>${home}/Library/Application Support/codex-with-chatgpt</string>`);
@@ -64,6 +63,48 @@ describe("macOS autostart", () => {
     } finally {
       cleanup(home);
     }
+  });
+
+  it("runs autostart once when the initial start succeeds", async () => {
+    const { runAutostart } = await import("../src/autostart/retry.js");
+    const start = vi.fn().mockReturnValue(0);
+    const wait = vi.fn();
+
+    const status = await runAutostart(start, wait);
+
+    expect(status).toBe(0);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed autostart and stops after success", async () => {
+    const { runAutostart } = await import("../src/autostart/retry.js");
+    const start = vi.fn().mockReturnValueOnce(1).mockReturnValueOnce(0);
+    const wait = vi.fn().mockResolvedValue(undefined);
+    const onRetry = vi.fn();
+
+    const status = await runAutostart(start, wait, onRetry);
+
+    expect(status).toBe(0);
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenCalledTimes(1);
+    expect(wait).toHaveBeenCalledWith(10_000);
+    expect(onRetry).toHaveBeenCalledWith(1, 10_000);
+  });
+
+  it("stops autostart retries after the finite attempt limit", async () => {
+    const { runAutostart } = await import("../src/autostart/retry.js");
+    const start = vi.fn().mockReturnValue(1);
+    const wait = vi.fn().mockResolvedValue(undefined);
+    const onRetry = vi.fn();
+
+    const status = await runAutostart(start, wait, onRetry);
+
+    expect(status).toBe(1);
+    expect(start).toHaveBeenCalledTimes(5);
+    expect(wait).toHaveBeenCalledTimes(4);
+    expect(wait.mock.calls.map(([delay]) => delay)).toEqual([10_000, 20_000, 40_000, 60_000]);
+    expect(onRetry).toHaveBeenCalledTimes(4);
   });
 
   it("can pin an explicit state root for autostart-like environments", () => {

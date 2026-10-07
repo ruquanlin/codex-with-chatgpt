@@ -27,6 +27,7 @@ import {
 } from "../tunnel/state.js";
 import { Logger } from "../logger/index.js";
 import { getStateDir } from "../config/paths.js";
+import { runAutostart } from "../autostart/retry.js";
 import { ensureSandboxAllowlist, getCodexConfigPath, isStateDirAllowlisted } from "../config/sandbox-allow.js";
 import { mergeUiPrefs, readUiPrefs, SETUP_MODES, type SetupMode } from "../config/ui-prefs.js";
 import {
@@ -473,6 +474,21 @@ program
 // ---------------------------------------------------------------- autostart
 
 const autostartCmd = program.command("autostart").description("Manage macOS login autostart for this workspace");
+
+// LaunchAgent-only entry point. Keep retry behavior out of the normal `c2c start`
+// path so manual starts retain their existing semantics.
+program
+  .command("autostart-run", { hidden: true })
+  .requiredOption("-w, --workspace <path>", "Workspace root")
+  .action(async (opts: { workspace: string }) => {
+    const status = await runAutostart(() => {
+      const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url), "start", "-w", opts.workspace, "--json"], {
+        stdio: "inherit",
+      });
+      return result.status;
+    });
+    process.exitCode = status;
+  });
 
 autostartCmd
   .command("enable")

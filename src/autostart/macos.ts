@@ -75,7 +75,7 @@ export function macAutostartPlist(config: MacAutostartConfig): string {
   const stateLogDir = path.join(stateDir, "logs");
   const stdout = path.join(stateLogDir, `autostart-${safeWorkspaceId(config.workspaceId)}.out.log`);
   const stderr = path.join(stateLogDir, `autostart-${safeWorkspaceId(config.workspaceId)}.err.log`);
-  const args = [nodePath, cliPath, "start", "-w", workspaceRoot, "--json"];
+  const args = [nodePath, cliPath, "autostart-run", "-w", workspaceRoot];
   const argXml = args.map((arg) => `    <string>${xmlEscape(arg)}</string>`).join("\n");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
