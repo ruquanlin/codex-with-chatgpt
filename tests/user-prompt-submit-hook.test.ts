@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { enrollUserPrompt } from "../src/hooks/user-prompt-submit.js";
 import { writeLastEndpoint } from "../src/config/endpoint.js";
 import { appendExecutionRecord } from "../src/execution/records.js";
+import { readExecutionRecords } from "../src/execution/records.js";
 import { mergeSession, readSession, writeSession } from "../src/session/state.js";
 import { Workspace } from "../src/workspace/manager.js";
 import { cleanup, isolateStateDir, makeTmpDir } from "./helpers.js";
@@ -58,7 +59,7 @@ describe("C2C UserPromptSubmit hook", () => {
     }
   });
 
-  it("blocks a new managed prompt while the previous task lacks a record", () => {
+  it("recovers a missing record as interrupted and starts the next iteration", () => {
     const root = makeTmpDir("prompt-hook-blocked");
     const state = isolateStateDir();
     try {
@@ -79,9 +80,59 @@ describe("C2C UserPromptSubmit hook", () => {
         })
       );
 
-      expect(enrollUserPrompt({ hook_event_name: "UserPromptSubmit", cwd: root, prompt: "next" })).toMatchObject({
-        decision: "block",
+      const result = enrollUserPrompt({ hook_event_name: "UserPromptSubmit", cwd: root, prompt: "next" });
+
+      expect(result).toMatchObject({ continue: true });
+      expect(readExecutionRecords(workspace.id)).toEqual([
+        expect.objectContaining({
+          taskId: "c2c_old",
+          iteration: 1,
+          command: "c2c interrupted recovery",
+          validationType: "other",
+          tests: null,
+          exitStatus: "interrupted",
+          exitCode: null,
+          changedFiles: 0,
+          notes: expect.stringMatching(/interrupted before Stop finalization.*no successful validation result.*does not mean zero changes were verified/),
+        }),
+      ]);
+      expect(readSession(workspace.id)?.checkpoint).toMatchObject({ taskId: "c2c_old", iteration: 2 });
+
+      // A repeated hook call sees the recovery record and advances normally without duplicating it.
+      expect(enrollUserPrompt({ hook_event_name: "UserPromptSubmit", cwd: root, prompt: "again" })).toMatchObject({ continue: true });
+      expect(readExecutionRecords(workspace.id).filter((record) => record.taskId === "c2c_old" && record.iteration === 1)).toHaveLength(1);
+      expect(readSession(workspace.id)?.checkpoint).toMatchObject({ taskId: "c2c_old", iteration: 3 });
+    } finally {
+      cleanup(root);
+      cleanup(state);
+      delete process.env.C2C_STATE_DIR;
+    }
+  });
+
+  it("blocks on recovery persistence failure and preserves the previous checkpoint", async () => {
+    const root = makeTmpDir("prompt-hook-recovery-failure");
+    const state = isolateStateDir();
+    try {
+      const workspace = new Workspace(root);
+      writeSession(
+        workspace.id,
+        mergeSession(null, {
+          url: "https://chatgpt.com/c/c2c",
+          conversationMode: "long-chat",
+          taskId: "c2c_old",
+          iteration: 1,
+          checkpoint: { taskId: "c2c_old", iteration: 1, protocolState: "EXECUTING", waitingFor: "none" },
+        })
+      );
+      const records = await import("../src/execution/records.js");
+      const appendSpy = (await import("vitest")).vi.spyOn(records, "appendExecutionRecord").mockImplementation(() => {
+        throw new Error("disk full");
       });
+      const result = enrollUserPrompt({ hook_event_name: "UserPromptSubmit", cwd: root, prompt: "next" });
+      expect(result).toMatchObject({ decision: "block", reason: expect.stringMatching(/interrupted recovery\/finalization failed/i) });
+      expect(readSession(workspace.id)?.checkpoint).toMatchObject({ taskId: "c2c_old", iteration: 1 });
+      expect(readExecutionRecords(workspace.id)).toEqual([]);
+      appendSpy.mockRestore();
     } finally {
       cleanup(root);
       cleanup(state);

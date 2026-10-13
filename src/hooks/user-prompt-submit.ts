@@ -1,4 +1,4 @@
-import { hasExecutionRecord } from "../execution/records.js";
+import { appendExecutionRecord, hasExecutionRecord } from "../execution/records.js";
 import { getStateDir } from "../config/paths.js";
 import { readLastEndpoint } from "../config/endpoint.js";
 import { mergeSession, readSession, writeSession, type SavedSession } from "../session/state.js";
@@ -57,12 +57,37 @@ export function enrollUserPrompt(input: UserPromptSubmitInput): UserPromptSubmit
 
     const active = previous?.checkpoint;
     if (active && !hasExecutionRecord(workspace.id, active.taskId, active.iteration)) {
-      return {
-        decision: "block",
-        reason:
-          `Previous C2C-managed task ${active.taskId} iteration ${active.iteration} has no execution record. ` +
-          "Finalize it before starting another Codex task.",
-      };
+      try {
+        appendExecutionRecord(workspace.id, {
+          taskId: active.taskId,
+          iteration: active.iteration,
+          changedFiles: 0,
+          command: "c2c interrupted recovery",
+          exitCode: null,
+          validationType: "other",
+          tests: null,
+          exitStatus: "interrupted",
+          timestamp: new Date().toISOString(),
+          notes:
+            "This iteration was interrupted before Stop finalization and produced no successful validation result; " +
+            "changedFiles=0 is a schema placeholder and does not mean zero changes were verified.",
+        });
+      } catch {
+        return {
+          decision: "block",
+          reason:
+            `C2C interrupted recovery/finalization failed: could not persist execution record for ` +
+            `${active.taskId} iteration ${active.iteration}. The previous checkpoint was preserved.`,
+        };
+      }
+      if (!hasExecutionRecord(workspace.id, active.taskId, active.iteration)) {
+        return {
+          decision: "block",
+          reason:
+            `C2C interrupted recovery/finalization failed: no execution record exists for ` +
+            `${active.taskId} iteration ${active.iteration}. The previous checkpoint was preserved.`,
+        };
+      }
     }
 
     const taskId = previous?.taskId ?? `c2c_${workspace.id.slice(0, 12)}`;
