@@ -67,4 +67,41 @@ describe("C2C workflow artifact execution-reporting contract", () => {
     expect(skill).toContain("The gate result is binding:");
     expect(skill).toContain("Only an explicit user instruction may bypass");
   });
+
+  it("keeps generic workflow authority global and C2C policy additive", () => {
+    const policy = readArtifact("docs/codex-execution-policy.md");
+    const debugging = readArtifact("docs/efficient-debugging-workflow.md");
+    expect(policy).toContain("active global workflow");
+    expect(policy).toContain("C2C-specific");
+    expect(debugging).toContain("Required Validation");
+    expect(debugging).not.toContain("## Phase 4 — Full Validation");
+  });
+
+  it("makes Codex execution ownership conditional in protocol and Project templates", () => {
+    const protocol = readArtifact("docs/protocol.md");
+    const skill = readArtifact("skill/SKILL.md");
+    expect(protocol).not.toContain("Codex owns execution.");
+    expect(protocol).toContain("active global workflow chooses the execution owner");
+    expect(protocol).toContain("only when Codex delegation is selected");
+    expect(skill).not.toContain("You are the planning and review layer for one local workspace. Codex executes.");
+    expect(skill).toContain("active global workflow chooses the execution owner");
+  });
+
+  it("keeps direct execution separate from direct workspace mutation authorization", () => {
+    const policy = readArtifact("docs/codex-execution-policy.md");
+    const protocol = readArtifact("docs/protocol.md");
+    const skill = readArtifact("skill/SKILL.md");
+
+    expect(policy).toContain("Direct execution does not imply permission to modify source code.");
+    expect(policy).toContain("C2C mutation\ntools such as `apply_patch` may only be used when the active global workflow\nconfirms explicit user authorization for direct workspace mutation.");
+    expect(policy).toContain("Selecting\ndirect execution is not itself direct-write authorization.");
+
+    for (const template of [protocol, skill]) {
+      expect(template).toContain("Direct execution does not itself authorize source-code changes");
+      expect(template).toContain("C2C mutation tools such as `apply_patch`");
+      expect(template).toContain("does not itself authorize source-code changes");
+      expect(template).toContain("explicit user authorization for direct workspace mutation");
+      expect(template).toContain("keep connector work read-only");
+    }
+  });
 });

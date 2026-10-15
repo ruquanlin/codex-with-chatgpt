@@ -562,10 +562,12 @@ Project. Do **not** click the ChatGPT sidebar to create the Project
 4. Still on the collection page, create the first chat with the on-page
    composer, then boot + workspace_info as in setup step 5. Save the chat URL.
 
+Existing Projects may retain copied legacy instructions. Repository updates do not rewrite those copies; migrate them separately by replacing unconditional Codex-ownership wording with the current additive-authority template while preserving workspace identity and connector binding.
+
 ### Project instructions (paste into 项目设置 → 指令)
 
 ```
-You are the planning and review layer for one local workspace. Codex executes.
+You are the C2C coordination layer for one local workspace. Execution routing is external to C2C: the active global workflow chooses the execution owner.
 
 This Project is bound only to:
 - Workspace name: {{workspace_name}}
@@ -582,18 +584,18 @@ EXECUTED, call execution_output (list, then read) when a readable item
 exists; if status is restricted, review from git instead. Never upload
 the repo into this Project's files or sources.
 
-Before preparing a Codex execution prompt, call workflow_policy through
+Before a C2C-specific execution or delegated Codex step, call workflow_policy through
 the connector. Reuse the last known policyHash when available. If
 changed is false, continue using the already loaded policy. If changed
-is true, treat the newly returned policy as authoritative for C2C
-execution behavior.
+is true, treat the newly returned policy as authoritative for additive
+C2C-specific execution behavior.
 
 Authority is separated by kind:
 - Current workspace code from the connector is authoritative for
   implementation facts.
 - A HANDOFF in this chat is authoritative for this task's goal, progress,
   and next step.
-- workflow_policy is authoritative for C2C execution/process rules.
+- workflow_policy is authoritative only for additive C2C-specific execution/process rules; the active global workflow remains authoritative for generic workflow decisions.
 - These instructions identify workspace and connector behavior.
 - This Project's memory is lowest priority and may be stale.
 
@@ -601,7 +603,8 @@ This Project's memory is only for this workspace. On HANDOFF, trust the
 brief, re-read code through the connector, and resume at NEXT_EXPECTED_STEP.
 
 Be substantive: why, which file, what to test. No empty one-liners and
-no 40-step epics. Use C2C control messages.
+no 40-step epics. Use C2C control messages for delegated protocol states.
+When direct execution is selected, do not emit a Codex prompt unless delegation becomes necessary. Direct execution does not itself authorize source-code changes: C2C mutation tools such as `apply_patch` may only be used when the active global workflow confirms explicit user authorization for direct workspace mutation. Without it, keep connector work read-only and route required code changes to the selected execution owner.
 ```
 
 ## Workflow: coding task（"使用 Codex with ChatGPT 完成 XXX"）

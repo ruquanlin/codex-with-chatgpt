@@ -1,21 +1,21 @@
 # Efficient Debugging Workflow
 
-This document defines the default debugging and implementation workflow for C2C / Codex development tasks.
+This document defines C2C-specific debugging mechanics. The active global workflow remains authoritative for generic scope, execution ownership, model selection, validation breadth, prompt generation, and escalation.
 
-The goal is to reduce unnecessary model usage, avoid repeated full-suite validation, and make debugging more reliable by separating diagnosis, implementation, review, and end-to-end verification.
+These rules are additive: they preserve C2C-specific decision gates and runtime verification requirements without creating a second global debugging workflow.
 
 ## Core Principle
 
-**Diagnose first. Fix second. Validate progressively. Run full validation and E2E only near the end.**
+**Use the active global workflow for generic debugging strategy; apply the C2C-specific gates and protocol requirements below when their conditions are met.**
 
-Do not combine investigation, broad code changes, full test suites, and end-to-end verification into a single Codex task unless the task is trivially small.
+The phase names below describe C2C debugging checkpoints. They do not independently require Codex delegation or broaden validation beyond what the active global workflow and acceptance criteria require.
 
 The default workflow is:
 
 1. Diagnosis
 2. Minimal Fix
 3. Review
-4. Full Validation
+4. Required Validation
 5. End-to-End Verification
 6. Commit / Push
 
@@ -124,22 +124,13 @@ If review finds a problem, return to Phase 2 with another minimal fix.
 
 ---
 
-## Phase 4 — Full Validation
+## Phase 4 — Required Validation
 
-Run broad validation only after the implementation has passed targeted tests and review.
+Run only the validation required by the active global workflow and the task acceptance criteria.
 
-Depending on the repository, this may include:
+This checkpoint does not independently require a full test suite, full build, full lint, full typecheck, or other broad validation. C2C-specific validation may still be required when a C2C invariant cannot otherwise be proven.
 
-- full test suite;
-- build;
-- lint;
-- typecheck;
-- `git diff --check`;
-- other project-specific validation.
-
-Avoid repeating full validation after every small edit.
-
-If a full-suite failure is unrelated to the change, report it clearly instead of expanding the task automatically.
+If required validation exposes an unrelated failure, report it without expanding the task automatically.
 
 ---
 
@@ -147,7 +138,7 @@ If a full-suite failure is unrelated to the change, report it clearly instead of
 
 For infrastructure, protocol, bridge, connector, persistence, authentication, deployment, or runtime problems, unit tests are not sufficient.
 
-Perform one real end-to-end verification after the implementation and full validation are stable.
+Perform real end-to-end verification when a C2C-specific runtime invariant requires consumer-visible proof. The active global workflow decides whether any additional E2E is warranted.
 
 The E2E test should:
 
@@ -179,7 +170,7 @@ Commit and push only after:
 - minimal fix is complete;
 - targeted tests pass;
 - review passes;
-- full validation passes or remaining unrelated failures are understood;
+- required validation passes or remaining unrelated failures are understood;
 - required E2E verification passes.
 
 Before committing:
@@ -190,74 +181,8 @@ Before committing:
 
 ---
 
-## Model / Usage Strategy
+## Global Workflow Delegation
 
-Use the most economical model that can reliably perform the current phase.
+Generic repository-inspection strategy, command/test efficiency, small-task exceptions, validation breadth, model choice, and commit/push sequencing come from the active global workflow.
 
-Default strategy:
-
-- Use a lightweight model for narrow diagnosis, targeted implementation, and mechanical test work.
-- Escalate to a stronger model only when:
-  - the root cause remains unclear after focused diagnosis;
-  - multiple subsystems interact in a way the lighter model cannot resolve;
-  - the model repeatedly produces speculative or inconsistent fixes;
-  - a high-risk architectural decision requires deeper reasoning.
-
-A cheaper model is not necessarily cheaper overall if it causes repeated broad retries.
-
-Optimize for **total task usage**, not just cost per single model call.
-
----
-
-## Command / Test Efficiency Rules
-
-Prefer:
-
-- targeted file inspection;
-- targeted search;
-- targeted test files;
-- targeted lint/typecheck where supported;
-- one final full-suite run;
-- one final E2E run.
-
-Avoid:
-
-- repeatedly running the full suite during diagnosis;
-- repeatedly rebuilding the entire project after every tiny edit;
-- asking Codex to re-read the entire repository;
-- combining investigation, implementation, full validation, and E2E into one large task by default;
-- rerunning expensive validation when no relevant code changed.
-
----
-
-## Exception: Trivially Small Tasks
-
-A task may skip the full staged workflow only when it is genuinely small and low-risk, for example:
-
-- typo correction;
-- documentation-only wording change;
-- one obvious localized change with no runtime impact;
-- deterministic formatting change.
-
-Even then:
-
-- keep the scope minimal;
-- run the smallest relevant validation;
-- do not perform unnecessary full-suite validation.
-
-When uncertain, use the staged workflow.
-
----
-
-## Default C2C Instruction
-
-For non-trivial debugging tasks, Codex should assume:
-
-> Diagnose first without changing code.  
-> Once the root cause is confirmed, make the smallest fix and run targeted tests.  
-> Review the diff before running the full suite.  
-> Run full validation only near completion.  
-> Perform real E2E verification last when runtime behavior is involved.  
-> Commit or push only after E2E passes.
-
-This workflow is the default unless the user explicitly requests a different process.
+This document adds only C2C-specific debugging gates and runtime/protocol verification requirements.
