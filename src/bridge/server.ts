@@ -7,7 +7,7 @@ import { AuthStore } from "../auth/store.js";
 import { createOAuthRouter } from "../auth/oauth.js";
 import { bearerAuth } from "../auth/middleware.js";
 import { PairingManager } from "../pairing/manager.js";
-import { createMcpServer } from "../mcp/server.js";
+import { createMcpServer, listRegisteredMcpToolNames } from "../mcp/server.js";
 import { createMcpHttpHandler } from "../mcp/http.js";
 import { CloudflaredQuickTunnel } from "../tunnel/cloudflared.js";
 import { CloudflaredNamedTunnel } from "../tunnel/cloudflared-named.js";
@@ -230,6 +230,28 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
       startedAt,
       stateDir,
     });
+  });
+
+  app.get("/admin/mcp-tools", adminGuard, async (_req, res) => {
+    try {
+      const names = await listRegisteredMcpToolNames({
+        workspace,
+        logger,
+        jevEndpoint: `http://${host}:${port}/ask`,
+      });
+      res.json({
+        count: names.length,
+        names,
+        phase2Tools: {
+          phase2_transition: names.includes("phase2_transition"),
+          phase2_execution_brief: names.includes("phase2_execution_brief"),
+          execution_brief_validate: names.includes("execution_brief_validate"),
+        },
+      });
+    } catch (error) {
+      logger.error(`MCP tool-list diagnostic failed: ${error instanceof Error ? error.message : String(error)}`);
+      res.status(500).json({ error: "mcp_tool_list_failed" });
+    }
   });
 
   app.post("/admin/tunnel/start", adminGuard, (_req, res) => {

@@ -96,12 +96,15 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(names).toEqual([
       "apply_patch",
       "build_project",
+      "execution_brief_validate",
       "execution_output",
       "execution_summary",
       "git_diff",
       "git_status",
       "jev_decision_gate",
       "list_directory",
+      "phase2_execution_brief",
+      "phase2_transition",
       "read_file",
       "run_lint",
       "run_tests",
@@ -128,7 +131,26 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "build_project", ["passed", "exitCode", "stdout", "stderr"]);
     expectToolOutputSchema(tools, "run_lint", ["passed", "exitCode", "stdout", "stderr"]);
     expectToolOutputSchema(tools, "jev_decision_gate", ["available", "decision", "confidence", "probabilities"]);
+    expectToolOutputSchema(tools, "execution_brief_validate", ["valid", "brief"]);
+    expectToolOutputSchema(tools, "phase2_transition", ["state", "proposal"]);
+    expectToolOutputSchema(tools, "phase2_execution_brief", ["state", "brief", "persistence"]);
     expectToolOutputSchema(tools, "workflow_policy", ["changed", "policyHash", "version"]);
+  });
+
+  it("exposes the live registered MCP tool names through the read-only admin diagnostic", async () => {
+    const response = await fetch(`${bridge.localBaseUrl()}/admin/mcp-tools`, {
+      headers: { authorization: `Bearer ${bridge.adminToken}` },
+    });
+    expect(response.status).toBe(200);
+    const diagnostic = await response.json() as { count: number; names: string[]; phase2Tools: Record<string, boolean> };
+    const liveTools = await client.listTools();
+    expect(diagnostic.count).toBe(liveTools.tools.length);
+    expect(diagnostic.names).toEqual(liveTools.tools.map((tool) => tool.name).sort());
+    expect(diagnostic.phase2Tools).toEqual({
+      phase2_transition: true,
+      phase2_execution_brief: true,
+      execution_brief_validate: true,
+    });
   });
 
   it("workflow_policy returns installed policy docs and supports hash-based cheap checks", async () => {
@@ -178,6 +200,103 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(changed.sources.length).toBe(2);
     expect(changed.policy.global).toContain("# Codex Execution Policy");
     expect(changed.policy.debugging).toContain("# Efficient Debugging Workflow");
+  });
+
+  it("validates and returns a canonical Execution Brief without writing it", async () => {
+    const brief = {
+      goal: "Fix the handler", knownFacts: ["Failure reproduced"],
+      approvedBasis: { type: "root_cause", summary: "Cause established" },
+      scope: { inScope: ["handler"], outOfScope: ["redesign"] },
+      mustChange: ["Correct handler"], mustNotChange: ["API"],
+      acceptanceCriteria: ["Regression passes"], validationExpectation: ["Run focused test"],
+      riskNotes: ["Low risk"], persistence: { mode: "ephemeral" },
+    };
+    const result = structuredJsonOf<{ valid: boolean; brief: typeof brief }>(await client.callTool({ name: "execution_brief_validate", arguments: { brief } }));
+    expect(result).toEqual({ valid: true, brief });
+    expect(fs.existsSync(path.join(root, "docs", "workflow", "execution-briefs"))).toBe(false);
+  });
+
+  it("runs the Phase 2 transition and creates a brief only for the matching Jev-approved proposal", async () => {
+    const proposal = {
+      executionLineId: "mcp-line-1", goal: "Fix the handler",
+      scope: { inScope: ["handler"], outOfScope: ["redesign"] },
+      approvedBasis: { type: "approved_design", summary: "Approved narrow change" },
+      implementationBasis: ["preserve API"], jevRequired: true,
+    };
+    const first = structuredJsonOf<{ state: string; proposal: { identity: string } }>(await client.callTool({ name: "phase2_transition", arguments: { proposal } }));
+    expect(first.state).toBe("EXECUTION_PROPOSED");
+    const details = {
+      knownFacts: ["Handler failure reproduced"], mustChange: ["Correct handler"], mustNotChange: ["Public API"],
+      acceptanceCriteria: ["Focused test passes"], validationExpectation: ["Run focused test"], riskNotes: ["Low risk"],
+      persistence: { mode: "ephemeral" },
+    };
+    const changedProposal = { ...proposal, goal: "Expand and redesign handler" };
+    const stale = structuredJsonOf<{ state: string; created: boolean; brief?: unknown }>(await client.callTool({ name: "phase2_execution_brief", arguments: {
+      proposal: changedProposal,
+      boundJevResult: { proposalIdentity: first.proposal.identity, result: { available: true, decision: "proceed" } },
+      details,
+    } }));
+    expect(stale).toMatchObject({ state: "EXECUTION_PROPOSED", created: false });
+    expect(stale).not.toHaveProperty("brief");
+
+    const ready = structuredJsonOf<{ state: string; proposal: { identity: string } }>(await client.callTool({ name: "phase2_transition", arguments: {
+      proposal, boundJevResult: { proposalIdentity: first.proposal.identity, result: { available: true, decision: "proceed" } },
+    } }));
+    expect(ready.state).toBe("READY_FOR_EXECUTION");
+    const result = structuredJsonOf<{ state: string; brief: { goal: string }; persistence: { path?: string } }>(await client.callTool({ name: "phase2_execution_brief", arguments: {
+      proposal, boundJevResult: { proposalIdentity: ready.proposal.identity, result: { available: true, decision: "proceed" } }, details,
+    } }));
+    expect(result.state).toBe("READY_FOR_EXECUTION");
+    expect(result.brief.goal).toBe(proposal.goal);
+    expect(result.persistence.path).toBeUndefined();
+    expect(fs.existsSync(path.join(root, "docs", "workflow", "execution-briefs"))).toBe(false);
+  });
+
+  it.each([
+    ["reframe", true, "REFRAME_REQUIRED"],
+    ["stop", true, "STOPPED"],
+    [undefined, false, "BLOCKED"],
+  ] as const)("prevents brief creation for %s Jev result", async (decision, available, expectedState) => {
+    const proposal = {
+      executionLineId: `blocked-${expectedState}`, goal: "Fix the handler",
+      scope: { inScope: ["handler"], outOfScope: [] },
+      approvedBasis: { type: "root_cause", summary: "Cause established" },
+      implementationBasis: ["correct handler"], jevRequired: true,
+    };
+    const created = structuredJsonOf<{ proposal: { identity: string } }>(await client.callTool({ name: "phase2_transition", arguments: { proposal } }));
+    const result = structuredJsonOf<{ state: string; created: boolean; brief?: unknown }>(await client.callTool({ name: "phase2_execution_brief", arguments: {
+      proposal,
+      boundJevResult: { proposalIdentity: created.proposal.identity, result: { available, ...(decision ? { decision } : {}), error: "Jev unavailable" } },
+      details: {
+        knownFacts: ["Known"], mustChange: ["Change"], mustNotChange: ["Protected"],
+        acceptanceCriteria: ["Pass"], validationExpectation: ["Focused test"], riskNotes: ["Risk"],
+        persistence: { mode: "ephemeral" },
+      },
+    } }));
+    expect(result).toMatchObject({ state: expectedState, created: false });
+    expect(result).not.toHaveProperty("brief");
+  });
+
+  it("persists persisted Phase 2 briefs through the workspace persistence implementation", async () => {
+    const proposal = {
+      executionLineId: "persisted-mcp-line", goal: "Fix and verify the handler",
+      scope: { inScope: ["handler"], outOfScope: [] },
+      approvedBasis: { type: "explicit_instruction", summary: "Explicit bounded request" },
+      implementationBasis: ["change handler"], jevRequired: false,
+    };
+    const result = structuredJsonOf<{ state: string; brief: { persistence: { mode: string } }; persistence: { path?: string; reference?: string } }>(await client.callTool({ name: "phase2_execution_brief", arguments: {
+      proposal,
+      details: {
+        knownFacts: ["Handler exists"], mustChange: ["Correct handler"], mustNotChange: ["API"],
+        acceptanceCriteria: ["Focused test passes"], validationExpectation: ["Run focused test"], riskNotes: ["Bounded"],
+        persistence: { mode: "persisted" },
+      },
+      persistenceOptions: { taskSlug: "handler-fix", date: "2026-10-16" },
+    } }));
+    expect(result.state).toBe("READY_FOR_EXECUTION");
+    expect(result.brief.persistence.mode).toBe("persisted");
+    expect(result.persistence.reference).toMatch(/^docs\/workflow\/execution-briefs\/2026-10-16-handler-fix-[a-f0-9]{8}\.md$/);
+    expect(fs.readFileSync(result.persistence.path!, "utf8")).toContain("## Goal\nFix and verify the handler");
   });
 
   it("documents git_diff pagination with its output field names", async () => {

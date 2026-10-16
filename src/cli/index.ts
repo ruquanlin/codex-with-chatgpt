@@ -574,6 +574,29 @@ program
     say(`· 已授权连接：${info.tokenCount > 0 ? "是" : "否"}`);
   });
 
+program
+  .command("mcp-tools")
+  .description("List the registered MCP tool names for this workspace's live bridge")
+  .option("-w, --workspace <path>")
+  .action(async (opts: { workspace?: string }) => {
+    const workspace = new Workspace(resolveWorkspace(opts.workspace));
+    const observation = await findBridgeObservation(workspace.id);
+    if (observation.state !== "healthy") {
+      say(JSON.stringify({ ok: false, state: observation.state, reason: observation.reason }));
+      return;
+    }
+    try {
+      const tools = await adminFetch<{
+        count: number;
+        names: string[];
+        phase2Tools: Record<string, boolean>;
+      }>(observation.runtime, "GET", "/admin/mcp-tools");
+      say(JSON.stringify({ ok: true, ...tools }));
+    } catch (error) {
+      handleCliError(error, true);
+    }
+  });
+
 // ---------------------------------------------------------------- doctor
 
 program

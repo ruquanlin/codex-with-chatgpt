@@ -77,6 +77,19 @@ describe("C2C workflow artifact execution-reporting contract", () => {
     expect(debugging).not.toContain("## Phase 4 — Full Validation");
   });
 
+  it("documents the approved Phase 2 Jev and Execution Brief boundary", () => {
+    const phase2 = readArtifact("docs/workflow/phases/phase-2-jev-execution-brief.md");
+    expect(phase2).toContain("Jev(PROCEED)");
+    expect(phase2).toContain("Jev(REFRAME)");
+    expect(phase2).toContain("Jev(STOP)");
+    expect(phase2).toContain("available = false");
+    expect(phase2).toContain("docs/workflow/execution-briefs/");
+    expect(phase2).toContain("WDR and Execution Brief are intentionally separate");
+    expect(phase2).toContain("Phase 3 Prompt Compiler");
+    expect(phase2).toContain("model selection");
+    expect(phase2).toContain("Codex must not:");
+  });
+
   it("makes Codex execution ownership conditional in protocol and Project templates", () => {
     const protocol = readArtifact("docs/protocol.md");
     const skill = readArtifact("skill/SKILL.md");
