@@ -7,23 +7,29 @@ const BROWSER = /\b(browser|real interaction|actual rendering|visual|viewport)\b
 const NO_BROWSER = /\b(no browser|do not use browser|without browser|unit tests? only|static inspection only)\b/i;
 const PRODUCTION = /\b(production|prod runtime|worker runtime)\b/i;
 const RUNTIME = /\b(runtime|latency|performance|hot.path|telemetry|incident)\b/i;
+const PRESERVATION = /^(no changes? to|do not change|preserve|keep .* unchanged|without changing)\b/i;
+const NO_PRODUCTION = /\b(do not inspect production|without production|local (?:regression|validation|tests?) only)\b/i;
 
 export function validationIssues(brief: ExecutionBrief): string[] {
-  const acceptance = brief.acceptanceCriteria.join(" ");
+  const acceptance = brief.acceptanceCriteria.join("\n");
   const expectation = brief.validationExpectation.join(" ");
   if (needsBrowser(acceptance) && NO_BROWSER.test(expectation)) {
     return ["validationExpectation conflicts with acceptanceCriteria: browser verification is required by acceptance"];
+  }
+  if (PRODUCTION.test(acceptance) && /\b(telemetry|runtime evidence|production evidence)\b/i.test(acceptance) && NO_PRODUCTION.test(expectation)) {
+    return ["validationExpectation conflicts with acceptanceCriteria: production evidence is required by acceptance"];
   }
   return [];
 }
 
 function needsBrowser(acceptance: string): boolean {
-  return INTERACTION.test(acceptance) || (LAYOUT.test(acceptance) && BROWSER.test(acceptance));
+  return acceptance.split(/\n|;/).some((item) => !PRESERVATION.test(item.trim()) &&
+    (INTERACTION.test(item) || (LAYOUT.test(item) && BROWSER.test(item))));
 }
 
 export function routeValidation(brief: ExecutionBrief): ValidationPlan {
   const task = [brief.goal, ...brief.mustChange, ...brief.scope.inScope].join(" ");
-  const acceptance = brief.acceptanceCriteria.join(" ");
+  const acceptance = brief.acceptanceCriteria.join("\n");
   const explicit = brief.validationExpectation.map((check) => check.trim()).filter(Boolean);
   const browserRequired = needsBrowser(acceptance);
   const productionEvidenceRequired = PRODUCTION.test(task) && RUNTIME.test(task);

@@ -42,4 +42,13 @@ describe("Phase 3 validation routing", () => {
     const conflicting = withBrief({ goal: "Fix drag interaction", acceptanceCriteria: ["Verify drag in browser"], validationExpectation: ["Unit tests only; do not use browser"] });
     expect(validationIssues(conflicting)).toEqual(expect.arrayContaining([expect.stringContaining("validationExpectation conflicts with acceptanceCriteria")]));
   });
+  it("does not enable browser for an interaction named only as a preservation boundary", () => {
+    const result = routeValidation(withBrief({ acceptanceCriteria: ["No changes to 3D interaction logic"], validationExpectation: ["Inspect changed HTML only"] }));
+    expect(result.browserRequired).toBe(false);
+    expect(validationIssues(withBrief({ acceptanceCriteria: ["No changes to 3D interaction logic"], validationExpectation: ["Inspect changed HTML only"] }))).toEqual([]);
+  });
+  it("reports production-evidence contradictions instead of adding telemetry", () => {
+    const result = validationIssues(withBrief({ goal: "Fix production runtime latency", acceptanceCriteria: ["Confirm production telemetry recovers"], validationExpectation: ["Local regression only; do not inspect production"] }));
+    expect(result).toEqual(expect.arrayContaining([expect.stringContaining("validationExpectation conflicts with acceptanceCriteria")]));
+  });
 });

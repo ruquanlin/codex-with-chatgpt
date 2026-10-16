@@ -57,6 +57,30 @@ describe("Phase 3 compiler", () => {
     const result = compileExecutionBrief({ ...portfolio, mustChange: ["Fix it"] });
     expect(result).toMatchObject({ status: "REJECTED_INSUFFICIENT_BRIEF", issues: [expect.stringContaining("mustChange")] });
   });
+  it("fails closed when a generic implementation boundary ends in punctuation", () => {
+    expect(compileExecutionBrief({ ...portfolio, mustChange: ["Fix it."] })).toMatchObject({ status: "REJECTED_INSUFFICIENT_BRIEF" });
+  });
+  it("preserves implementation-relevant explicit basis and risk boundaries", () => {
+    const result = compileExecutionBrief({
+      ...portfolio,
+      approvedBasis: { type: "explicit_instruction", summary: "Use the existing CSS variable for mobile offset" },
+      riskNotes: ["Preserve the legacy cache key", "Low risk"],
+    });
+    expect(result.status).toBe("READY");
+    if (result.status === "READY") {
+      expect(result.package.prompt).toContain("Use the existing CSS variable for mobile offset");
+      expect(result.package.prompt).toContain("Preserve the legacy cache key");
+      expect(result.package.prompt).not.toContain("Low risk");
+    }
+  });
+  it("omits project history even when phrased as confirmed or already", () => {
+    const result = compileExecutionBrief({ ...portfolio, knownFacts: ["Confirmed: team meets weekly", "Project already existed in 2020", "Description positioning is in mobile-hotspot.css"] });
+    expect(result.status).toBe("READY");
+    if (result.status === "READY") {
+      expect(result.package.prompt).not.toContain("team meets weekly");
+      expect(result.package.prompt).not.toContain("existed in 2020");
+    }
+  });
   it("fails closed on contradictory validation expectations", () => {
     const result = compileExecutionBrief({ ...portfolio, acceptanceCriteria: ["Verify drag interaction in browser"], validationExpectation: ["Unit tests only; do not use browser"] });
     expect(result).toMatchObject({ status: "REJECTED_INSUFFICIENT_BRIEF", issues: [expect.stringContaining("validationExpectation conflicts")] });

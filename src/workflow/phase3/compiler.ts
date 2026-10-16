@@ -20,7 +20,8 @@ function section(name: string, lines: string[]): string {
 }
 
 function relevantFact(fact: string): boolean {
-  return /\b(confirmed|located|location|file|function|root cause|verified|exists|already|implementation|hot loop)\b|\.[cm]?[jt]sx?\b|\b[a-z-]+\.css\b/i.test(fact);
+  return /\b(root cause|hot loop|located|reproduced|verified behavior|implementation boundary)\b|\.[cm]?[jt]sx?\b|\b[a-z-]+\.css\b/i.test(fact)
+    || /\b[a-z]+[A-Z][a-zA-Z]*\b/.test(fact);
 }
 
 export function compileExecutionBrief(input: ExecutionBrief): Phase3Result {
@@ -32,7 +33,7 @@ export function compileExecutionBrief(input: ExecutionBrief): Phase3Result {
   }
 
   const issues = validationIssues(brief);
-  if (brief.mustChange.every((change) => GENERIC_CHANGE.test(change.trim()))) {
+  if (brief.mustChange.every((change) => GENERIC_CHANGE.test(change.trim().replace(/[.!?]+$/, "")))) {
     issues.unshift("mustChange does not identify an executable implementation boundary");
   }
   if (issues.length) return { status: "REJECTED_INSUFFICIENT_BRIEF", issues };
@@ -46,12 +47,15 @@ export function compileExecutionBrief(input: ExecutionBrief): Phase3Result {
   const scope = uniqueLines([
     ...brief.mustChange,
     ...brief.scope.inScope,
-    ...(brief.approvedBasis.type === "approved_design" ? [brief.approvedBasis.summary] : []),
+    ...(brief.approvedBasis.type === "approved_design" ||
+      (brief.approvedBasis.type === "explicit_instruction" && /\b(use|adjust|replace|implement|preserve|change|keep|follow)\b/i.test(brief.approvedBasis.summary))
+      ? [brief.approvedBasis.summary] : []),
     ...brief.acceptanceCriteria.map((criterion) => `Acceptance: ${criterion}`),
   ]);
   const boundaries = uniqueLines([
     ...brief.scope.outOfScope.map((item) => `Do not change ${item.replace(/^do not change\s+/i, "")}`),
     ...brief.mustNotChange.map((item) => `Do not change ${item.replace(/^do not change\s+/i, "")}`),
+    ...brief.riskNotes.filter((note) => /\b(preserve|must|avoid|do not|without changing|regression risk)\b/i.test(note)),
   ]);
   const blocks = [section("Task", [brief.goal.trim()])];
   if (scope.length || facts.length) blocks.push(section("Scope", [...scope, ...facts.map((fact) => `Known: ${fact}`)]));
