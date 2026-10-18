@@ -6,6 +6,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { startBridge, type Bridge } from "../src/bridge/server.js";
 import { appendExecutionRecord } from "../src/execution/records.js";
 import { saveExecutionOutput } from "../src/execution/output.js";
+import { createExecutionProposal } from "../src/workflow/phase2.js";
 import { makeTmpDir, cleanup, write, makeGitRepo, git, isolateStateDir } from "./helpers.js";
 
 let root: string;
@@ -90,7 +91,7 @@ afterAll(async () => {
 });
 
 describe("MCP tools over Streamable HTTP", () => {
-  it("lists all MCP tools", async () => {
+  it("lists all MCP tools including Phase 4A with output schemas", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
@@ -106,6 +107,8 @@ describe("MCP tools over Streamable HTTP", () => {
       "phase2_execution_brief",
       "phase2_transition",
       "phase3_compile_execution",
+      "phase4a_failure_history",
+      "phase4a_record_failure",
       "read_file",
       "run_lint",
       "run_tests",
@@ -136,7 +139,197 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "phase2_transition", ["state", "proposal"]);
     expectToolOutputSchema(tools, "phase2_execution_brief", ["state", "brief", "persistence"]);
     expectToolOutputSchema(tools, "phase3_compile_execution", ["status", "package", "issues"]);
+    expectToolOutputSchema(tools, "phase4a_record_failure", ["state", "outcome", "failure"]);
+    expectToolOutputSchema(tools, "phase4a_failure_history", ["failures"]);
+    expect(tools.find((tool) => tool.name === "phase4a_failure_history")?.annotations?.readOnlyHint).toBe(true);
+    expect(tools.find((tool) => tool.name === "phase4a_record_failure")?.annotations?.readOnlyHint).toBe(false);
     expectToolOutputSchema(tools, "workflow_policy", ["changed", "policyHash", "version"]);
+  });
+
+  describe("Phase 4A", () => {
+    const proposalFor = (line: string) => ({
+      executionLineId: line, goal: "Fix the handler",
+      scope: { inScope: ["handler"], outOfScope: ["redesign"] },
+      approvedBasis: { type: "approved_design" as const, summary: "Approved narrow change" },
+      implementationBasis: ["preserve API"], jevRequired: true,
+    });
+    const failureFor = (proposal: ReturnType<typeof proposalFor>, summary = "Command failed") => ({
+      executionLineId: proposal.executionLineId,
+      proposalIdentity: createExecutionProposal(proposal).identity,
+      failureType: "EXECUTION_FAILURE",
+      failedAtStage: "EXECUTION",
+      summary, evidence: ["exit code 1"], nextRoute: "SYSTEMATIC_DEBUGGING",
+    });
+    const callRecord = (proposal: ReturnType<typeof proposalFor>, failure = failureFor(proposal)) =>
+      client.callTool({ name: "phase4a_record_failure", arguments: { proposal, failure } });
+    const history = (args: Record<string, unknown> = {}) => client.callTool({ name: "phase4a_failure_history", arguments: args });
+
+    it("records a failed line, returns the terminal outcome, and reads it by exact line", async () => {
+      const proposal = proposalFor("phase4a-record-line");
+      const result = structuredJsonOf<{ state: string; outcome: string; failure: { failureId: string; createdAt: string; executionLineId: string } }>(await callRecord(proposal));
+      expect(result.state).toBe("FAILED");
+      expect(result.outcome).toBe("NEW_DECISION_REQUIRED");
+      expect(result.failure.executionLineId).toBe(proposal.executionLineId);
+      expect(result.failure.failureId).toMatch(/^[a-f0-9]{64}$/);
+      expect(fs.existsSync(path.join(stateDir, "failures", bridge.workspace.id, `${result.failure.failureId}.json`))).toBe(true);
+      expect(structuredJsonOf<{ failures: unknown[] }>(await history({ executionLineId: proposal.executionLineId })).failures).toEqual([result.failure]);
+      expect(structuredJsonOf<{ failures: unknown[] }>(await history({ executionLineId: "phase4a-missing" })).failures).toEqual([]);
+      expect(fs.existsSync(path.join(root, "docs", "workflow", "execution-briefs"))).toBe(false);
+    });
+
+    it("returns the original record for an identical request and rejects immutable conflicts", async () => {
+      const proposal = proposalFor("phase4a-duplicate-line");
+      const first = structuredJsonOf<{ failure: { createdAt: string; summary: string } }>(await callRecord(proposal));
+      const duplicate = structuredJsonOf<{ failure: { createdAt: string; summary: string } }>(await callRecord(proposal));
+      expect(duplicate.failure).toEqual(first.failure);
+      const conflict = await callRecord(proposal, failureFor(proposal, "Different failure"));
+      expect(conflict.isError).toBe(true);
+      expect(jsonOf<{ error: string }>(conflict).error).toBe("FAILURE_RECORD_CONFLICT");
+      expect(structuredJsonOf<{ failures: unknown[] }>(await history({ executionLineId: proposal.executionLineId })).failures).toEqual([first.failure]);
+    });
+
+    it("rejects mismatched proposal identity, execution line, and invalid failure mapping", async () => {
+      const proposal = proposalFor("phase4a-invalid-line");
+      const changedProposal = { ...proposal, goal: "Different goal" };
+      const changedResult = await callRecord(changedProposal, failureFor(proposal));
+      expect(changedResult.isError).toBe(true);
+      expect(jsonOf<{ error: string }>(changedResult).error).toBe("INVALID_FAILURE");
+      for (const failure of [
+        { ...failureFor(proposal), proposalIdentity: "0".repeat(64) },
+        { ...failureFor(proposal), executionLineId: "another-line" },
+        { ...failureFor(proposal), nextRoute: "VALIDATION_REROUTE" },
+      ]) {
+        const result = await callRecord(proposal, failure);
+        expect(result.isError).toBe(true);
+        expect(jsonOf<{ error: string }>(result).error).toBe("INVALID_FAILURE");
+      }
+      expect(structuredJsonOf<{ failures: unknown[] }>(await history({ executionLineId: proposal.executionLineId })).failures).toEqual([]);
+    });
+
+    it("requires write scope for recording and read scope for history", async () => {
+      const readToken = bridge.authStore.issueTokens({ clientId: "phase4a-read", scopes: ["workspace.read"] });
+      const readClient = new Client({ name: "phase4a-read", version: "1.0.0" });
+      const readTransport = new StreamableHTTPClientTransport(new URL(`${bridge.localBaseUrl()}/mcp`), {
+        requestInit: { headers: { authorization: `Bearer ${readToken.accessToken}` } },
+      });
+      const writeToken = bridge.authStore.issueTokens({ clientId: "phase4a-write", scopes: ["workspace.write"] });
+      const writeClient = new Client({ name: "phase4a-write", version: "1.0.0" });
+      const writeTransport = new StreamableHTTPClientTransport(new URL(`${bridge.localBaseUrl()}/mcp`), {
+        requestInit: { headers: { authorization: `Bearer ${writeToken.accessToken}` } },
+      });
+      await readClient.connect(readTransport);
+      await writeClient.connect(writeTransport);
+      try {
+        const proposal = proposalFor("phase4a-denied-line");
+        const deniedRecord = await readClient.callTool({ name: "phase4a_record_failure", arguments: { proposal, failure: failureFor(proposal) } });
+        expect(jsonOf<{ error: string }>(deniedRecord).error).toBe("INSUFFICIENT_SCOPE");
+        const deniedHistory = await writeClient.callTool({ name: "phase4a_failure_history", arguments: {} });
+        expect(jsonOf<{ error: string }>(deniedHistory).error).toBe("INSUFFICIENT_SCOPE");
+        expect(structuredJsonOf<{ failures: unknown[] }>(await history({ executionLineId: proposal.executionLineId })).failures).toEqual([]);
+      } finally {
+        await readClient.close();
+        await writeClient.close();
+      }
+    });
+
+    it("returns bounded recent records and rejects combined modes and invalid limits", async () => {
+      for (let index = 0; index < 12; index++) await callRecord(proposalFor(`phase4a-recent-${index}`));
+      expect(structuredJsonOf<{ failures: unknown[] }>(await history()).failures).toHaveLength(10);
+      expect(structuredJsonOf<{ failures: unknown[] }>(await history({ limit: 2 })).failures).toHaveLength(2);
+      expect(structuredJsonOf<{ failures: unknown[] }>(await history({ limit: 50 })).failures.length).toBeGreaterThanOrEqual(12);
+      for (const args of [{ limit: 0 }, { limit: 51 }, { limit: 1.5 }, { limit: 2, executionLineId: "phase4a-recent-0" }]) {
+        const result = await history(args);
+        expect(result.isError).toBe(true);
+      }
+    });
+
+    it("keeps history scoped to the server workspace even when a caller supplies another workspace ID", async () => {
+      const otherRoot = makeTmpDir("phase4a-other-ws");
+      const otherBridge = await startBridge({ workspaceRoot: otherRoot, port: 0, persistRuntime: false, authStoreFile: path.join(makeTmpDir("phase4a-other-auth"), "store.json") });
+      const tokens = otherBridge.authStore.issueTokens({ clientId: "phase4a-other", scopes: ["workspace.read", "workspace.write"] });
+      const otherClient = new Client({ name: "phase4a-other", version: "1.0.0" });
+      const transport = new StreamableHTTPClientTransport(new URL(`${otherBridge.localBaseUrl()}/mcp`), {
+        requestInit: { headers: { authorization: `Bearer ${tokens.accessToken}` } },
+      });
+      try {
+        await otherClient.connect(transport);
+        const proposal = proposalFor("phase4a-isolated-line");
+        expect(structuredJsonOf<{ failures: unknown[] }>(await history({ executionLineId: proposal.executionLineId })).failures).toEqual([]);
+        const primaryResult = structuredJsonOf<{ failure: { failureId: string } }>(await client.callTool({
+          name: "phase4a_record_failure", arguments: { proposal, failure: failureFor(proposal) },
+        }));
+        const otherResult = structuredJsonOf<{ failure: { failureId: string } }>(await otherClient.callTool({
+          name: "phase4a_record_failure", arguments: { proposal, failure: failureFor(proposal), workspaceId: bridge.workspace.id },
+        }));
+        expect(otherBridge.workspace.id).not.toBe(bridge.workspace.id);
+        expect(otherResult.failure.failureId).not.toBe(primaryResult.failure.failureId);
+        expect(fs.existsSync(path.join(stateDir, "failures", bridge.workspace.id, `${primaryResult.failure.failureId}.json`))).toBe(true);
+        expect(fs.existsSync(path.join(stateDir, "failures", otherBridge.workspace.id, `${otherResult.failure.failureId}.json`))).toBe(true);
+        const otherHistory = structuredJsonOf<{ failures: { failureId: string }[] }>(await otherClient.callTool({
+          name: "phase4a_failure_history", arguments: { executionLineId: proposal.executionLineId, workspaceId: bridge.workspace.id },
+        }));
+        expect(otherHistory.failures).toHaveLength(1);
+        expect(otherHistory.failures[0].failureId).toBe(otherResult.failure.failureId);
+        expect(otherHistory.failures[0].failureId).not.toBe(primaryResult.failure.failureId);
+      } finally {
+        await otherClient.close();
+        await otherBridge.close();
+        cleanup(otherRoot);
+      }
+    });
+
+    it("blocks failed execution lines at both Phase 2 entry points while allowing a fresh identity", async () => {
+      const proposalA = proposalFor("phase4a-terminal-line");
+      const identityA = createExecutionProposal(proposalA).identity;
+      const jevForA = { proposalIdentity: identityA, result: { available: true, decision: "proceed" } };
+      const initialA = structuredJsonOf<{ state: string }>(await client.callTool({
+        name: "phase2_transition", arguments: { proposal: proposalA, boundJevResult: jevForA },
+      }));
+      expect(initialA.state).toBe("READY_FOR_EXECUTION");
+
+      await callRecord(proposalA);
+      expect(structuredJsonOf<{ failures: { executionLineId: string }[] }>(await history({ executionLineId: proposalA.executionLineId })).failures.map((entry) => entry.executionLineId)).toEqual([proposalA.executionLineId]);
+
+      const changedGoal = { ...proposalA, goal: "Redesign the handler" };
+      const transitionBlocked = await client.callTool({ name: "phase2_transition", arguments: { proposal: changedGoal, boundJevResult: jevForA } });
+      expect(transitionBlocked.isError).toBe(true);
+      expect(jsonOf<{ error: string }>(transitionBlocked).error).toBe("FAILED_EXECUTION_LINE");
+
+      const briefDetails = {
+        knownFacts: ["Failure recorded"], mustChange: ["Fix handler"], mustNotChange: ["Public API"],
+        acceptanceCriteria: ["Focused test passes"], validationExpectation: ["Run focused test"], riskNotes: ["Bounded"],
+        persistence: { mode: "ephemeral" },
+      };
+      const changedScope = { ...proposalA, scope: { inScope: ["handler", "router"], outOfScope: ["redesign"] } };
+      const changedScopeIdentity = createExecutionProposal(changedScope).identity;
+      const briefBlocked = await client.callTool({ name: "phase2_execution_brief", arguments: {
+        proposal: changedScope,
+        boundJevResult: { proposalIdentity: changedScopeIdentity, result: { available: true, decision: "proceed" } },
+        details: briefDetails,
+      } });
+      expect(briefBlocked.isError).toBe(true);
+      expect(jsonOf<{ error: string }>(briefBlocked).error).toBe("FAILED_EXECUTION_LINE");
+
+      const repeatedBlocked = await client.callTool({ name: "phase2_transition", arguments: { proposal: proposalA, boundJevResult: jevForA } });
+      expect(repeatedBlocked.isError).toBe(true);
+      expect(jsonOf<{ error: string }>(repeatedBlocked).error).toBe("FAILED_EXECUTION_LINE");
+      expect(structuredJsonOf<{ failures: { executionLineId: string }[] }>(await history({ executionLineId: proposalA.executionLineId })).failures).toHaveLength(1);
+
+      const proposalB = proposalFor("phase4a-fresh-line");
+      const oldJevOnB = structuredJsonOf<{ state: string }>(await client.callTool({
+        name: "phase2_transition", arguments: { proposal: proposalB, boundJevResult: jevForA },
+      }));
+      expect(oldJevOnB.state).toBe("EXECUTION_PROPOSED");
+      const jevForB = { proposalIdentity: createExecutionProposal(proposalB).identity, result: { available: true, decision: "proceed" } };
+      const freshB = structuredJsonOf<{ state: string }>(await client.callTool({
+        name: "phase2_transition", arguments: { proposal: proposalB, boundJevResult: jevForB },
+      }));
+      expect(freshB.state).toBe("READY_FOR_EXECUTION");
+      const freshBrief = structuredJsonOf<{ state: string; created: boolean }>(await client.callTool({
+        name: "phase2_execution_brief", arguments: { proposal: proposalB, boundJevResult: jevForB, details: briefDetails },
+      }));
+      expect(freshBrief).toMatchObject({ state: "READY_FOR_EXECUTION", created: true });
+    });
   });
 
   it("exposes the live registered MCP tool names through the read-only admin diagnostic", async () => {
