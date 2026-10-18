@@ -599,6 +599,144 @@ describe("MCP tools over Streamable HTTP", () => {
     });
   });
 
+  it("cross-phase E2E", async () => {
+    const profileDir = path.join(stateDir, "project-profiles", bridge.workspace.id.toLowerCase());
+    const profilePath = path.join(profileDir, "profile.json");
+    const originalProfile = fs.existsSync(profilePath) ? fs.readFileSync(profilePath, "utf8") : undefined;
+    const profile = {
+      schemaVersion: 1, workspaceId: bridge.workspace.id,
+      workspaceName: { value: bridge.workspace.name, provenance: { kind: "observed", source: "cross-phase-test", verifiedAt: "2026-10-18T00:00:00.000Z" } },
+      projectType: { value: "node", provenance: { kind: "observed", source: "cross-phase-test", verifiedAt: "2026-10-18T00:00:00.000Z" } },
+      frameworks: { value: ["React"], provenance: { kind: "observed", source: "cross-phase-test", verifiedAt: "2026-10-18T00:00:00.000Z" } },
+      packageManager: { value: "pnpm", provenance: { kind: "observed", source: "cross-phase-test", verifiedAt: "2026-10-18T00:00:00.000Z" } },
+    };
+    const setProfile = (state: "not_found" | "current" | "stale") => {
+      fs.rmSync(profileDir, { recursive: true, force: true });
+      if (state !== "not_found") {
+        const value = structuredClone(profile);
+        if (state === "stale") value.workspaceName.value = "Stale workspace name";
+        fs.mkdirSync(profileDir, { recursive: true });
+        fs.writeFileSync(profilePath, JSON.stringify({ recordVersion: 1, profile: value }));
+      }
+    };
+    const proposalFor = (executionLineId: string) => ({
+      executionLineId, goal: "Fix the bounded handler behavior",
+      scope: { inScope: ["handler branch"], outOfScope: ["public API redesign"] },
+      approvedBasis: { type: "approved_design" as const, summary: "Preserve the existing API" },
+      implementationBasis: ["correct the handler branch"], jevRequired: true,
+    });
+    const details = {
+      knownFacts: ["The handler branch has a reproducible failure"],
+      mustChange: ["Correct the empty-input handler branch"], mustNotChange: ["Public API"],
+      acceptanceCriteria: ["Empty input returns the expected response"],
+      validationExpectation: ["Run the focused handler regression"], riskNotes: ["Bounded change"],
+      persistence: { mode: "ephemeral" },
+    };
+    const completionFor = (proposal: ReturnType<typeof proposalFor>, overrides: Record<string, unknown> = {}) => ({
+      executionLineId: proposal.executionLineId,
+      proposalIdentity: createExecutionProposal(proposal).identity,
+      validation: { status: "PASSED", evidence: ["simulated focused regression passed"] },
+      review: { status: "PASSED", evidence: ["simulated review passed"] },
+      acceptance: { required: false, status: "NOT_REQUIRED" },
+      ...overrides,
+    });
+    const phase2Ready = async (proposal: ReturnType<typeof proposalFor>) => {
+      const identity = createExecutionProposal(proposal).identity;
+      const result = structuredJsonOf<{ state: string; proposal: { identity: string } }>(await client.callTool({
+        name: "phase2_transition", arguments: { proposal, boundJevResult: { proposalIdentity: identity, result: { available: true, decision: "proceed" } } },
+      }));
+      expect(result).toMatchObject({ state: "READY_FOR_EXECUTION", proposal: { identity } });
+      return identity;
+    };
+    try {
+      const success = proposalFor("cross-phase-e2e-success");
+      const successIdentity = await phase2Ready(success);
+      const brief = structuredJsonOf<{ state: string; brief: Record<string, unknown>; persistence: { path?: string } }>(await client.callTool({
+        name: "phase2_execution_brief", arguments: {
+          proposal: success,
+          boundJevResult: { proposalIdentity: successIdentity, result: { available: true, decision: "proceed" } }, details,
+        },
+      }));
+      expect(brief.state).toBe("READY_FOR_EXECUTION");
+      expect(brief.brief).toMatchObject({ goal: success.goal, persistence: { mode: "ephemeral" } });
+      expect(brief.persistence.path).toBeUndefined();
+      expect(fs.existsSync(path.join(root, "docs", "workflow", "execution-briefs"))).toBe(false);
+      expect(structuredJsonOf<{ status: string }>(await client.callTool({
+        name: "phase3_compile_execution", arguments: { brief: brief.brief },
+      })).status).toBe("READY");
+
+      const completionArgs = (completion: Record<string, unknown>) => ({
+        name: "phase4b_route_completion",
+        arguments: { proposal: success, completion: completionFor(success, completion) },
+      });
+      expect(structuredJsonOf<{ state: string; outcome: string }>(await client.callTool({
+        ...completionArgs({ review: { status: "PENDING" }, acceptance: { required: true, status: "PENDING" } }),
+      }))).toMatchObject({ state: "REVIEW_PENDING", outcome: "REVIEW_REQUIRED" });
+      expect(structuredJsonOf<{ state: string; outcome: string }>(await client.callTool({
+        ...completionArgs({ acceptance: { required: true, status: "PENDING" } }),
+      }))).toMatchObject({ state: "ACCEPTANCE_PENDING", outcome: "USER_ACCEPTANCE_REQUIRED" });
+      expect(structuredJsonOf<{ state: string; outcome: string }>(await client.callTool({
+        ...completionArgs({ acceptance: { required: true, status: "ACCEPTED", evidence: ["simulated user acceptance evidence"] } }),
+      }))).toMatchObject({ state: "COMPLETED", outcome: "CLOSED" });
+
+      const failed = proposalFor("cross-phase-e2e-failure");
+      const failedIdentity = await phase2Ready(failed);
+      expect(failedIdentity).toBe(createExecutionProposal(failed).identity);
+      const needsRecord = structuredJsonOf<{ state: string; outcome: string }>(await client.callTool({
+        name: "phase4b_route_completion", arguments: { proposal: failed, completion: completionFor(failed, { validation: { status: "FAILED", evidence: ["simulated validation failure"] } }) },
+      }));
+      expect(needsRecord).toMatchObject({ state: "BLOCKED", outcome: "FAILURE_RECORD_REQUIRED" });
+      const failure = {
+        executionLineId: failed.executionLineId, proposalIdentity: failedIdentity,
+        failureType: "VALIDATION_FAILURE", failedAtStage: "VALIDATION", summary: "Simulated handler validation failed",
+        evidence: ["simulated focused regression failure"], nextRoute: "SYSTEMATIC_DEBUGGING",
+      };
+      const recorded = structuredJsonOf<{ state: string; outcome: string; failure: { failureType: string; failedAtStage: string } }>(await client.callTool({
+        name: "phase4a_record_failure", arguments: { proposal: failed, failure },
+      }));
+      expect(recorded).toMatchObject({ state: "FAILED", outcome: "NEW_DECISION_REQUIRED" });
+      expect(recorded.failure).toMatchObject({ failureType: "VALIDATION_FAILURE", failedAtStage: "VALIDATION" });
+      expect(structuredJsonOf<{ state: string; outcome: string }>(await client.callTool({
+        name: "phase4b_route_completion", arguments: { proposal: failed, completion: completionFor(failed) },
+      }))).toMatchObject({ state: "FAILED", outcome: "NEW_DECISION_REQUIRED" });
+      const reuse = await client.callTool({ name: "phase2_transition", arguments: {
+        proposal: failed, boundJevResult: { proposalIdentity: failedIdentity, result: { available: true, decision: "proceed" } },
+      } });
+      expect(reuse.isError).toBe(true);
+      expect(jsonOf<{ error: string }>(reuse).error).toBe("FAILED_EXECUTION_LINE");
+
+      for (const state of ["not_found", "current", "stale"] as const) {
+        setProfile(state);
+        expect(structuredJsonOf<{ status: string }>(await client.callTool({ name: "phase4c_get_project_profile", arguments: {} })).status).toBe(state);
+        const probe = proposalFor(`cross-phase-profile-${state}`);
+        const identity = await phase2Ready(probe);
+        expect(structuredJsonOf<{ state: string }>(await client.callTool({
+          name: "phase4b_route_completion", arguments: { proposal: probe, completion: completionFor(probe, { review: { status: "PENDING" }, acceptance: { required: true, status: "PENDING" } }) },
+        })).state).toBe("REVIEW_PENDING");
+        expect(structuredJsonOf<{ state: string }>(await client.callTool({
+          name: "phase4b_route_completion", arguments: { proposal: probe, completion: completionFor(probe, { acceptance: { required: true, status: "ACCEPTED", evidence: ["simulated acceptance"] } }) },
+        })).state).toBe("COMPLETED");
+        const failedProbe = proposalFor(`cross-phase-profile-failed-${state}`);
+        const failedProbeIdentity = await phase2Ready(failedProbe);
+        await client.callTool({ name: "phase4a_record_failure", arguments: { proposal: failedProbe, failure: {
+          executionLineId: failedProbe.executionLineId, proposalIdentity: failedProbeIdentity,
+          failureType: "EXECUTION_FAILURE", failedAtStage: "EXECUTION", summary: "Simulated failure",
+          evidence: ["simulated failure evidence"], nextRoute: "SYSTEMATIC_DEBUGGING",
+        } } });
+        expect(structuredJsonOf<{ state: string }>(await client.callTool({
+          name: "phase4b_route_completion", arguments: { proposal: failedProbe, completion: completionFor(failedProbe) },
+        })).state).toBe("FAILED");
+        expect(identity).toBe(createExecutionProposal(probe).identity);
+      }
+    } finally {
+      fs.rmSync(profileDir, { recursive: true, force: true });
+      if (originalProfile !== undefined) {
+        fs.mkdirSync(profileDir, { recursive: true });
+        fs.writeFileSync(profilePath, originalProfile);
+      }
+    }
+  });
+
   it("exposes the live registered MCP tool names through the read-only admin diagnostic", async () => {
     const response = await fetch(`${bridge.localBaseUrl()}/admin/mcp-tools`, {
       headers: { authorization: `Bearer ${bridge.adminToken}` },
