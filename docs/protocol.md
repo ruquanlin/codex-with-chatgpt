@@ -18,6 +18,22 @@ matching `(taskId, iteration)` execution metadata through the existing
 `STATE: EXECUTED` is sent. This remains backward-compatible with existing
 EXECUTED, checkpoint, and execution-summary semantics.
 
+### Delegated Codex Cloud PR delivery
+
+When the selected execution owner is Codex Cloud and the work is in a GitHub
+repository, the handoff must ask Codex Cloud to create a GitHub pull request.
+Ask for a short PR description with what changed, validation run and its
+result, and any blockers or remaining risks. Ask Codex Cloud to return the PR
+URL on completion, then explicitly pass that URL to ChatGPT in the C2C control
+handoff (`PR_URL` in EXECUTED, or HANDOFF when resuming in a new conversation).
+Do not assume Codex Cloud autonomously notifies ChatGPT that the PR exists.
+
+ChatGPT reviews the changed files in the PR Diff and the PR checks through the
+GitHub connector. Do not substitute a pasted Codex completion report for that
+review. Leave merging to an explicit user decision; do not merge automatically.
+The existing matching `(taskId, iteration)` execution-record persistence gate
+still applies to every C2C-managed Codex iteration, including this PR path.
+
 ## States
 
 ```
@@ -127,6 +143,9 @@ CHANGED_FILES:
 
 TESTS:
 27 passed
+
+PR_URL:
+<GitHub PR URL, when delegated Codex Cloud created one>
 
 Please independently inspect the workspace and current git diff through MCP.
 If execution_output lists a readable item for this iteration, list then read it.
@@ -264,8 +283,16 @@ Rules:
 12. If you receive a HANDOFF message, this conversation continues an
     existing task. Trust the handoff brief for history, re-read any code
     you need through MCP, and resume from NEXT_EXPECTED_STEP.
-13. If this chat sits in a ChatGPT Project, use only the connector named
-    in that Project's instructions. Do not use another workspace's connector.
+13. If this chat sits in a ChatGPT Project, use only the workspace connector
+    named in that Project's instructions for local workspace access. Do not
+    use another workspace's connector.
+14. For delegated Codex Cloud work in a GitHub repository, ask Codex Cloud to
+    create a PR with a short description of changes, validation results, and
+    blockers or remaining risks, and to return its URL. Explicitly pass the
+    URL in the C2C control handoff; inspect its Diff and checks with the
+    GitHub connector. Do not rely on pasted Codex reports, assume automatic
+    PR notification, or merge automatically. The C2C execution record is
+    still required.
 ```
 
 ## Project instructions
@@ -286,8 +313,9 @@ This Project is bound only to:
 - Kind: {{project_type}} ({{languages}} / {{frameworks}})
 - Connector (use this one only): {{connector_name}}
 
-When you call tools, use ONLY that connector. Do not use any other
-Codex with ChatGPT connector. If workspace_info names a different
+For local workspace tools, use ONLY that connector. Use the GitHub connector
+for delegated Codex Cloud PR review. Do not use any other Codex with ChatGPT
+connector. If workspace_info names a different
 workspace, stop. Do not plan. Do not use this Project's memory.
 
 Read code, git, diffs, and any released command output through that
@@ -316,5 +344,12 @@ brief, re-read code through the connector, and resume at NEXT_EXPECTED_STEP.
 
 Be substantive: why, which file, what to test. No empty one-liners and
 no 40-step epics. Use C2C control messages for delegated protocol states.
+For delegated Codex Cloud work in a GitHub repository, request a PR with a
+short description of changes, validation results, and blockers or remaining
+risks. Ask Codex Cloud to return its URL, then explicitly pass it to ChatGPT
+in the C2C control handoff. Use that URL to review the PR Diff and checks
+through the GitHub connector, not a pasted Codex report. Do not assume
+automatic PR notification or merge automatically. Keep the matching C2C
+execution record requirement.
 When direct execution is selected, do not emit a Codex prompt unless delegation becomes necessary. Direct execution does not itself authorize source-code changes: C2C mutation tools such as `apply_patch` may only be used when the active global workflow confirms explicit user authorization for direct workspace mutation. Without it, keep connector work read-only and route required code changes to the selected execution owner.
 ```

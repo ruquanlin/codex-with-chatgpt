@@ -574,8 +574,9 @@ This Project is bound only to:
 - Kind: {{project_type}} ({{languages}} / {{frameworks}})
 - Connector (use this one only): {{connector_name}}
 
-When you call tools, use ONLY that connector. Do not use any other
-Codex with ChatGPT connector. If workspace_info names a different
+For local workspace tools, use ONLY that connector. Use the GitHub connector
+for delegated Codex Cloud PR review. Do not use any other Codex with ChatGPT
+connector. If workspace_info names a different
 workspace, stop. Do not plan. Do not use this Project's memory.
 
 Read code, git, diffs, and any released command output through that
@@ -604,6 +605,13 @@ brief, re-read code through the connector, and resume at NEXT_EXPECTED_STEP.
 
 Be substantive: why, which file, what to test. No empty one-liners and
 no 40-step epics. Use C2C control messages for delegated protocol states.
+For delegated Codex Cloud work in a GitHub repository, request a PR with a
+short description of changes, validation results, and blockers or remaining
+risks. Ask Codex Cloud to return its URL, then explicitly pass it to ChatGPT
+in the C2C control handoff. Use that URL to review the PR Diff and checks
+through the GitHub connector, not a pasted Codex report. Do not assume
+automatic PR notification or merge automatically. Keep the matching C2C
+execution record requirement.
 When direct execution is selected, do not emit a Codex prompt unless delegation becomes necessary. Direct execution does not itself authorize source-code changes: C2C mutation tools such as `apply_patch` may only be used when the active global workflow confirms explicit user authorization for direct workspace mutation. Without it, keep connector work read-only and route required code changes to the selected execution owner.
 ```
 
