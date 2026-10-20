@@ -35,13 +35,10 @@ export function createExecutionProposal(input: ExecutionProposalInput): Executio
 }
 
 export function transitionExecutionProposal(proposal: ExecutionProposal, boundResult?: BoundJevResult): Phase2State {
-  if (!proposal.jevRequired) return { state: "READY_FOR_EXECUTION", proposal };
-  if (!boundResult || boundResult.proposalIdentity !== proposal.identity) return { state: "EXECUTION_PROPOSED", proposal };
-  const result = boundResult.result;
-  if (!result.available) return { state: "BLOCKED", proposal, jevResult: result };
-  if (result.decision === "proceed") return { state: "READY_FOR_EXECUTION", proposal, jevResult: result };
-  if (result.decision === "reframe") return { state: "REFRAME_REQUIRED", proposal, jevResult: result };
-  return { state: "STOPPED", proposal, jevResult: result };
+  // READY requires a server-issued Jev receipt, which Phase 2 does not yet
+  // implement. Caller-controlled flags and results cannot authorize execution.
+  void boundResult;
+  return { state: "EXECUTION_PROPOSED", proposal };
 }
 
 export type ReadyBriefDetails = Pick<ExecutionBriefInput, "knownFacts" | "mustChange" | "mustNotChange" | "acceptanceCriteria" | "validationExpectation" | "riskNotes" | "persistence">;

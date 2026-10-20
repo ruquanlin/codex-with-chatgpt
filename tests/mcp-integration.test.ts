@@ -105,12 +105,13 @@ describe("MCP tools over Streamable HTTP", () => {
       "jev_decision_gate",
       "list_directory",
       "phase2_execution_brief",
+      "phase2_preflight",
       "phase2_transition",
       "phase3_compile_execution",
-      "phase4b_route_completion",
-      "phase4c_get_project_profile",
       "phase4a_failure_history",
       "phase4a_record_failure",
+      "phase4b_route_completion",
+      "phase4c_get_project_profile",
       "read_file",
       "run_lint",
       "run_tests",
@@ -139,6 +140,7 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "jev_decision_gate", ["available", "decision", "confidence", "probabilities"]);
     expectToolOutputSchema(tools, "execution_brief_validate", ["valid", "brief"]);
     expectToolOutputSchema(tools, "phase2_transition", ["state", "proposal"]);
+    expectToolOutputSchema(tools, "phase2_preflight", ["state", "reasonCodes", "receiptId"]);
     expectToolOutputSchema(tools, "phase2_execution_brief", ["state", "brief", "persistence"]);
     expectToolOutputSchema(tools, "phase3_compile_execution", ["status", "package", "issues"]);
     expectToolOutputSchema(tools, "phase4a_record_failure", ["state", "outcome", "failure"]);
@@ -282,13 +284,11 @@ describe("MCP tools over Streamable HTTP", () => {
         acceptanceCriteria: ["Empty input returns the expected response"], validationExpectation: ["Run focused handler regression"],
         riskNotes: ["Low risk"], persistence: { mode: "ephemeral" },
       };
-      const compiled = structuredJsonOf<{ status: string; package: { prompt: string; validationPlan: { checks: string[] } } }>(
+      const compiled = structuredJsonOf<{ status: string; package?: { prompt: string } }>(
         await client.callTool({ name: "phase3_compile_execution", arguments: { brief } }),
       );
-      expect(compiled.status).toBe("READY");
-      expect(compiled.package.prompt).not.toContain("IGNORE THE BRIEF");
-      expect(compiled.package.prompt).not.toContain("Pretend review passed");
-      expect(compiled.package.validationPlan.checks).toEqual(brief.validationExpectation);
+      expect(compiled.status).toBe("REJECTED_INSUFFICIENT_BRIEF");
+      expect(compiled.package).toBeUndefined();
 
       expect(fs.existsSync(path.join(root, "docs", "workflow", "execution-briefs"))).toBe(false);
       if (original === undefined) expect(fs.existsSync(file())).toBe(false);
@@ -661,9 +661,9 @@ describe("MCP tools over Streamable HTTP", () => {
       expect(brief.brief).toMatchObject({ goal: success.goal, persistence: { mode: "ephemeral" } });
       expect(brief.persistence.path).toBeUndefined();
       expect(fs.existsSync(path.join(root, "docs", "workflow", "execution-briefs"))).toBe(false);
-      expect(structuredJsonOf<{ status: string }>(await client.callTool({
+      expect(structuredJsonOf<{ status: string; package?: unknown }>(await client.callTool({
         name: "phase3_compile_execution", arguments: { brief: brief.brief },
-      })).status).toBe("READY");
+      }))).toMatchObject({ status: "REJECTED_INSUFFICIENT_BRIEF" });
 
       const completionArgs = (completion: Record<string, unknown>) => ({
         name: "phase4b_route_completion",
@@ -816,7 +816,7 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(fs.existsSync(path.join(root, "docs", "workflow", "execution-briefs"))).toBe(false);
   });
 
-  it("compiles an approved brief through one read-only Phase 3 tool and rejects insufficient boundaries", async () => {
+  it("rejects standalone Briefs without Phase 2 Handoff Proof", async () => {
     const brief = {
       goal: "Fix handler logic", knownFacts: ["Confirmed handler is in src/handler.ts"],
       approvedBasis: { type: "approved_design", summary: "Correct the existing handler branch" },
@@ -828,15 +828,13 @@ describe("MCP tools over Streamable HTTP", () => {
     const ready = structuredJsonOf<{ status: string; package: { prompt: string; modelRecommendation: { tier: string }; validationPlan: { browserRequired: boolean } } }>(
       await client.callTool({ name: "phase3_compile_execution", arguments: { brief } })
     );
-    expect(ready.status).toBe("READY");
-    expect(ready.package.prompt).toContain("Correct the handler branch for empty input");
-    expect(ready.package.modelRecommendation.tier).toBe("STANDARD");
-    expect(ready.package.validationPlan.browserRequired).toBe(false);
+    expect(ready.status).toBe("REJECTED_INSUFFICIENT_BRIEF");
+    expect(ready.package).toBeUndefined();
     const rejected = structuredJsonOf<{ status: string; issues: string[] }>(
       await client.callTool({ name: "phase3_compile_execution", arguments: { brief: { ...brief, mustChange: ["Fix it"] } } })
     );
     expect(rejected.status).toBe("REJECTED_INSUFFICIENT_BRIEF");
-    expect(rejected.issues[0]).toContain("mustChange");
+    expect(rejected.issues[0]).toContain("Handoff Proof");
     expect(fs.existsSync(path.join(root, "docs", "workflow", "execution-briefs"))).toBe(false);
   });
 

@@ -16,12 +16,14 @@ import { PRODUCT_NAME, VERSION } from "../version.js";
 import { applyPatch } from "../workspace/applyPatch.js";
 import { readWorkflowPolicy } from "../policy/workflow-policy.js";
 import { runJevDecisionGate } from "../decision/jev-gate.js";
+import { getJevStop, issueJevReceipt } from "../workflow/phase2/jev-receipts.js";
+import { verifyPhase2Authorization } from "../workflow/phase2/authorization.js";
+import { issueHandoffProof, readHandoffProof } from "../workflow/phase2/handoff-proof.js";
+import { assessPreflight, issuePreflightReceipt, parsePreflightInput } from "../workflow/phase2/preflight-receipts.js";
 import { createExecutionBrief } from "../workflow/execution-brief.js";
 import {
   createExecutionProposal,
   createReadyExecutionBrief,
-  transitionExecutionProposal,
-  type BoundJevResult,
   type ExecutionProposalInput,
   type ReadyBriefDetails,
 } from "../workflow/phase2.js";
@@ -262,6 +264,7 @@ const jevDecisionGateOutputSchema = {
   probabilities: z.record(z.number()).optional(),
   model: z.string().optional(),
   error: z.string().optional(),
+  receiptId: z.string().optional(),
 };
 
 const failureRecordOutputSchema = z.object({
@@ -421,12 +424,65 @@ export function createMcpServer(ctx: McpContext): McpServer {
   );
 
   server.registerTool(
+    "phase2_preflight",
+    {
+      title: "Evaluate trusted conditional Phase 2 preflight",
+      description: "Evaluate bounded current task material, known Stops and mandatory Jev signals; issue a signed NOT_REQUIRED receipt only for eligible ordinary work. " + UNTRUSTED_NOTE,
+      inputSchema: { proposal: z.unknown(), preflight: z.unknown() },
+      outputSchema: { state: z.string(), reasonCodes: z.array(z.string()), receiptId: z.string().optional() },
+      annotations: { readOnlyHint: false },
+    },
+    async ({ proposal, preflight }, extra) => {
+      const denied = requireScope(extra.authInfo, "workspace.write");
+      if (denied) return denied;
+      try {
+        const supplied = proposal as ExecutionProposalInput;
+        if (!supplied || typeof supplied !== "object" || Array.isArray(supplied) ||
+          Object.keys(supplied).some((key) => !["executionLineId", "goal", "scope", "approvedBasis", "implementationBasis", "riskProfile", "jevRequired", "identity"].includes(key))) {
+          throw new Error("Invalid proposal material");
+        }
+        if (typeof supplied.executionLineId !== "string" || !supplied.executionLineId.trim() ||
+          typeof supplied.goal !== "string" || !supplied.scope ||
+          !Array.isArray(supplied.scope.inScope) || !Array.isArray(supplied.scope.outOfScope) ||
+          supplied.scope.inScope.some((value) => typeof value !== "string" || !value.trim()) ||
+          supplied.scope.outOfScope.some((value) => typeof value !== "string" || !value.trim()) ||
+          !supplied.approvedBasis || !["root_cause", "approved_design", "explicit_instruction"].includes(supplied.approvedBasis.type) ||
+          typeof supplied.approvedBasis.summary !== "string" || !Array.isArray(supplied.implementationBasis) ||
+          supplied.implementationBasis.some((value) => typeof value !== "string" || !value.trim()) ||
+          (supplied.riskProfile !== undefined && typeof supplied.riskProfile !== "string")) {
+          throw new Error("Invalid proposal material");
+        }
+        if (typeof supplied?.jevRequired !== "boolean") throw new Error("jevRequired must be explicit");
+        if (!supplied.goal.trim() || !supplied.scope.inScope.length || !supplied.approvedBasis.summary.trim() ||
+          !supplied.implementationBasis.length) {
+          return okStructured({ state: "NEEDS_TASK_DETAILS", reasonCodes: ["INSUFFICIENT_TASK_DETAILS"] });
+        }
+        const created = createExecutionProposal(supplied);
+        if ("identity" in supplied && supplied.identity !== created.identity) throw new Error("Mismatched proposal identity");
+        const evidence = parsePreflightInput(preflight);
+        if (await getJevStop(workspace.id, created.executionLineId, created)) {
+          return okStructured({ state: "STOPPED", reasonCodes: ["KNOWN_JEV_STOP"] });
+        }
+        if (await getFailureByExecutionLine(workspace.id, created.executionLineId)) {
+          return okStructured({ state: "BLOCKED_VALIDATION", reasonCodes: ["FAILED_EXECUTION_LINE"] });
+        }
+        const decision = assessPreflight(created, evidence);
+        if (decision.state !== "NOT_REQUIRED") return okStructured(decision);
+        const receipt = await issuePreflightReceipt(workspace.id, created, evidence);
+        return okStructured({ ...decision, receiptId: receipt.receiptId });
+      } catch {
+        return okStructured({ state: "BLOCKED_VALIDATION", reasonCodes: ["INVALID_PREFLIGHT_MATERIAL"] });
+      }
+    }
+  );
+
+  server.registerTool(
     "phase2_transition",
     {
       title: "Phase 2 proposal transition",
       description:
         "Create an execution proposal identity and compute its Phase 2 Jev transition. " +
-        "A Jev result only applies when bound to the exact returned proposal identity. " + UNTRUSTED_NOTE,
+        "Only a server-issued, proposal-bound Jev receipt reference can authorize readiness. " + UNTRUSTED_NOTE,
       inputSchema: { proposal: z.unknown(), boundJevResult: z.unknown().optional() },
       outputSchema: { state: z.string(), proposal: z.record(z.unknown()), jevResult: z.record(z.unknown()).optional() },
       annotations: { readOnlyHint: true },
@@ -439,7 +495,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
         if (await getFailureByExecutionLine(workspace.id, created.executionLineId)) {
           return fail("FAILED_EXECUTION_LINE", "This execution line has a recorded failure and requires a new Phase 2 decision.");
         }
-        const state = transitionExecutionProposal(created, boundJevResult as BoundJevResult | undefined);
+        const { state } = await verifyPhase2Authorization(workspace.id, created, boundJevResult);
         return okStructured(state);
       } catch (error) {
         return fail("INVALID_EXECUTION_PROPOSAL", error instanceof Error ? error.message : String(error));
@@ -452,7 +508,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     {
       title: "Create Phase 2 Execution Brief",
       description:
-        "Recompute Phase 2 readiness from the proposal and identity-bound Jev result, then create a canonical brief. " +
+        "Verify the C2C-issued Jev receipt before creating a canonical, proof-backed brief. " +
         "Persisted briefs are written under docs/workflow/execution-briefs/. This does not route work or compile prompts. " + UNTRUSTED_NOTE,
       inputSchema: {
         proposal: z.unknown(),
@@ -477,16 +533,20 @@ export function createMcpServer(ctx: McpContext): McpServer {
         if (await getFailureByExecutionLine(workspace.id, created.executionLineId)) {
           return fail("FAILED_EXECUTION_LINE", "This execution line has a recorded failure and requires a new Phase 2 decision.");
         }
-        const state = transitionExecutionProposal(created, boundJevResult as BoundJevResult | undefined);
+        const { state, receiptId, source } = await verifyPhase2Authorization(workspace.id, created, boundJevResult);
         if (state.state !== "READY_FOR_EXECUTION") {
           return okStructured({ state: state.state, created: false, proposal: state.proposal });
         }
-        const brief = createReadyExecutionBrief(state, details as ReadyBriefDetails);
-        if (brief.persistence.mode === "ephemeral") {
-          return okStructured({ state: state.state, created: true, proposal: state.proposal, brief, persistence: {} });
-        }
         const writeDenied = requireScope(extra.authInfo, "workspace.write");
         if (writeDenied) return writeDenied;
+        if (!receiptId) return fail("AUTHORIZATION_RECEIPT_REQUIRED", "A C2C-issued authorization receipt is required.");
+        const preflight = source === "NOT_REQUIRED" && boundJevResult && typeof boundJevResult === "object"
+          ? parsePreflightInput((boundJevResult as Record<string, unknown>).preflight) : undefined;
+        const brief = createReadyExecutionBrief(state, details as ReadyBriefDetails);
+        if (brief.persistence.mode === "ephemeral") {
+          await issueHandoffProof(workspace.id, state.proposal, brief, receiptId, preflight);
+          return okStructured({ state: state.state, created: true, proposal: state.proposal, brief, persistence: {} });
+        }
         if (!persistenceOptions) return fail("PERSISTENCE_OPTIONS_REQUIRED", "Persisted briefs require taskSlug and date.");
         const persistence = await persistExecutionBrief(brief, {
           workspaceRoot: workspace.root,
@@ -494,6 +554,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
           date: persistenceOptions.date,
           executionLineId: state.proposal.executionLineId,
         });
+        await issueHandoffProof(workspace.id, state.proposal, brief, receiptId, preflight);
         return okStructured({ state: state.state, created: true, proposal: state.proposal, brief, persistence });
       } catch (error) {
         return fail("PHASE2_EXECUTION_BRIEF_FAILED", error instanceof Error ? error.message : String(error));
@@ -521,6 +582,15 @@ export function createMcpServer(ctx: McpContext): McpServer {
     async ({ brief }, extra) => {
       const denied = requireScope(extra.authInfo, "workspace.read");
       if (denied) return denied;
+      const rejectUnproven = () => okStructured({
+        status: "REJECTED_INSUFFICIENT_BRIEF" as const,
+        issues: ["A valid Phase 2 Handoff Proof is required for this workspace and Brief."],
+      });
+      try {
+        if (!await readHandoffProof(workspace.id, brief as ExecutionBrief)) return rejectUnproven();
+      } catch {
+        return rejectUnproven();
+      }
       return okStructured(compileExecutionBrief(brief as ExecutionBrief));
     }
   );
@@ -560,27 +630,50 @@ export function createMcpServer(ctx: McpContext): McpServer {
         task: z.string().min(1).describe("The exact Codex task currently being considered"),
         evidence: z.array(z.string()).default([]).describe("Concise observed facts supporting the next step"),
         attempts: z.array(z.string()).default([]).describe("Relevant prior attempts/results, especially repeated or failed ones"),
+        proposal: z.object({
+          executionLineId: z.string().trim().min(1), goal: z.string().trim().min(1),
+          scope: z.object({ inScope: z.array(z.string()), outOfScope: z.array(z.string()) }),
+          approvedBasis: z.object({ type: z.enum(["root_cause", "approved_design", "explicit_instruction"]), summary: z.string() }),
+          implementationBasis: z.array(z.string()), riskProfile: z.string().optional(), jevRequired: z.boolean(),
+          identity: z.string().optional(),
+        }).strict().optional().describe("Complete Phase 2 proposal to bind a C2C-issued Jev receipt"),
       },
       outputSchema: jevDecisionGateOutputSchema,
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: false },
     },
     async (args, extra) => {
-      const denied = requireScope(extra.authInfo, "workspace.read");
+      const denied = requireScope(extra.authInfo, args.proposal ? "workspace.write" : "workspace.read");
       if (denied) return denied;
+      let proposal;
       try {
-        return okStructured(await runJevDecisionGate(
-          {
-            task: args.task,
-            evidence: args.evidence,
-            attempts: args.attempts,
-          },
-          ctx.jevEndpoint ? { endpoint: ctx.jevEndpoint } : {}
-        ));
+        if (args.proposal) {
+          proposal = createExecutionProposal(args.proposal as ExecutionProposalInput);
+          if (args.proposal.identity !== undefined && args.proposal.identity !== proposal.identity) {
+            return fail("INVALID_PROPOSAL_IDENTITY", "Proposal identity does not match its material fields.");
+          }
+          if (await getJevStop(workspace.id, proposal.executionLineId, proposal)) {
+            return fail("JEV_STOPPED", "This investigation line has a recorded Jev stop decision.");
+          }
+        }
+      } catch (error) {
+        return fail("JEV_RECEIPT_STORE_FAILED", error instanceof Error ? error.message : String(error));
+      }
+      const request = { task: args.task, evidence: args.evidence, attempts: args.attempts };
+      let result;
+      try {
+        result = await runJevDecisionGate(request, ctx.jevEndpoint ? { endpoint: ctx.jevEndpoint } : {});
       } catch (error) {
         return okStructured({
           available: false,
           error: error instanceof Error ? error.message : String(error),
         });
+      }
+      if (!proposal || !result.available || !result.decision) return okStructured(result);
+      try {
+        const receipt = await issueJevReceipt(workspace.id, proposal, request, result);
+        return okStructured({ ...result, receiptId: receipt.receiptId });
+      } catch (error) {
+        return fail("JEV_RECEIPT_STORE_FAILED", error instanceof Error ? error.message : String(error));
       }
     }
   );

@@ -14,23 +14,18 @@ const proceed = { available: true, decision: "proceed" as const };
 const bound = (proposal: ReturnType<typeof createExecutionProposal>, result: typeof proceed) => ({ proposalIdentity: proposal.identity, result });
 
 describe("Phase 2 transitions", () => {
-  it("allows deterministic proposals without Jev and gated proposals after proceed", () => {
-    expect(transitionExecutionProposal(createExecutionProposal({ ...proposalInput, jevRequired: false })).state).toBe("READY_FOR_EXECUTION");
+  it("fails closed for caller-selected Jev bypasses and unverified results", () => {
+    expect(transitionExecutionProposal(createExecutionProposal({ ...proposalInput, jevRequired: false })).state).toBe("EXECUTION_PROPOSED");
     const proposal = createExecutionProposal(proposalInput);
-    expect(transitionExecutionProposal(proposal, bound(proposal, proceed)).state).toBe("READY_FOR_EXECUTION");
+    expect(transitionExecutionProposal(proposal, bound(proposal, proceed)).state).toBe("EXECUTION_PROPOSED");
+    expect(transitionExecutionProposal(proposal).state).toBe("EXECUTION_PROPOSED");
   });
 
-  it("returns reframe upstream without authorizing a brief", () => {
+  it("does not accept caller-supplied reframe, stop, or unavailable results as gate outcomes", () => {
     const proposal = createExecutionProposal(proposalInput);
-    const state = transitionExecutionProposal(proposal, bound(proposal, { available: true, decision: "reframe" }));
-    expect(state.state).toBe("REFRAME_REQUIRED");
-    expect(() => createReadyExecutionBrief(state)).toThrow(/READY_FOR_EXECUTION/);
-  });
-
-  it("stops or blocks when Jev says stop or is unavailable", () => {
-    const proposal = createExecutionProposal(proposalInput);
-    expect(transitionExecutionProposal(proposal, bound(proposal, { available: true, decision: "stop" })).state).toBe("STOPPED");
-    expect(transitionExecutionProposal(proposal, bound(proposal, { available: false, error: "offline" })).state).toBe("BLOCKED");
+    expect(transitionExecutionProposal(proposal, bound(proposal, { available: true, decision: "reframe" })).state).toBe("EXECUTION_PROPOSED");
+    expect(transitionExecutionProposal(proposal, bound(proposal, { available: true, decision: "stop" })).state).toBe("EXECUTION_PROPOSED");
+    expect(transitionExecutionProposal(proposal, bound(proposal, { available: false, error: "offline" })).state).toBe("EXECUTION_PROPOSED");
   });
 
   it("changes identity for material proposal changes and invalidates prior proceed", () => {
@@ -45,20 +40,23 @@ describe("Phase 2 transitions", () => {
       expect(next.identity).not.toBe(original.identity);
       expect(transitionExecutionProposal(next, { proposalIdentity: original.identity, result: proceed }).state).toBe("EXECUTION_PROPOSED");
     }
-    expect(transitionExecutionProposal(original, bound(original, proceed)).state).toBe("READY_FOR_EXECUTION");
+    expect(transitionExecutionProposal(original, bound(original, proceed)).state).toBe("EXECUTION_PROPOSED");
   });
 
-  it("creates a brief only for a ready current proposal using supplied confirmed details", () => {
-    const proposal = createExecutionProposal({ ...proposalInput, jevRequired: false });
-    const ready = transitionExecutionProposal(proposal);
-    const brief = createReadyExecutionBrief(ready, {
+  it("prevents untrusted inputs from creating an approved Execution Brief", () => {
+    const details = {
       knownFacts: ["The approved design is recorded"], mustChange: ["Update handler"], mustNotChange: ["API"],
       acceptanceCriteria: ["Focused test passes"], validationExpectation: ["Run focused test"], riskNotes: ["Low risk"],
       persistence: { mode: "ephemeral" },
-    });
-    expect(brief.goal).toBe(proposal.goal);
-    expect(brief.approvedBasis).toEqual(proposal.approvedBasis);
-    expect(brief.scope).toEqual(proposal.scope);
-    expect(() => createReadyExecutionBrief({ ...ready, state: "BLOCKED" })).toThrow(/READY_FOR_EXECUTION/);
+    };
+    const bypassProposal = createExecutionProposal({ ...proposalInput, jevRequired: false });
+    const bypassState = transitionExecutionProposal(bypassProposal);
+    expect(bypassState.state).toBe("EXECUTION_PROPOSED");
+    expect(() => createReadyExecutionBrief(bypassState, details)).toThrow(/READY_FOR_EXECUTION/);
+
+    const gatedProposal = createExecutionProposal(proposalInput);
+    const forgedProceed = transitionExecutionProposal(gatedProposal, bound(gatedProposal, proceed));
+    expect(forgedProceed.state).toBe("EXECUTION_PROPOSED");
+    expect(() => createReadyExecutionBrief(forgedProceed, details)).toThrow(/READY_FOR_EXECUTION/);
   });
 });
