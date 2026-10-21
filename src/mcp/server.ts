@@ -617,6 +617,49 @@ export function createMcpServer(ctx: McpContext): McpServer {
   );
 
   server.registerTool(
+    "jev_stop_status",
+    {
+      title: "Read historical Jev Stop status",
+      description: "Check whether an existing signed historical Stop matches this proposal in the authenticated workspace. This lookup makes no filesystem changes. " + UNTRUSTED_NOTE,
+      inputSchema: { proposal: z.unknown() },
+      outputSchema: { state: z.enum(["STOPPED", "CLEAR"]) },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ proposal }, extra) => {
+      const denied = requireScope(extra.authInfo, "workspace.read");
+      if (denied) return denied;
+      try {
+        const allowed = new Set(["executionLineId", "goal", "scope", "approvedBasis", "implementationBasis", "riskProfile", "jevRequired", "identity"]);
+        if (!proposal || typeof proposal !== "object" || Array.isArray(proposal) ||
+          Object.keys(proposal).some((key) => !allowed.has(key))) throw new Error("Invalid proposal material");
+        const supplied = proposal as ExecutionProposalInput & { identity?: unknown };
+        if (typeof supplied.executionLineId !== "string" || !supplied.executionLineId.trim() ||
+          typeof supplied.goal !== "string" || !supplied.goal.trim() ||
+          !supplied.scope || typeof supplied.scope !== "object" ||
+          !Array.isArray(supplied.scope.inScope) || !Array.isArray(supplied.scope.outOfScope) ||
+          [...supplied.scope.inScope, ...supplied.scope.outOfScope].some((value) => typeof value !== "string" || !value.trim()) ||
+          !supplied.approvedBasis || !["root_cause", "approved_design", "explicit_instruction"].includes(supplied.approvedBasis.type) ||
+          typeof supplied.approvedBasis.summary !== "string" || !supplied.approvedBasis.summary.trim() ||
+          !Array.isArray(supplied.implementationBasis) || !supplied.implementationBasis.length ||
+          supplied.implementationBasis.some((value) => typeof value !== "string" || !value.trim()) ||
+          typeof supplied.jevRequired !== "boolean" ||
+          (supplied.riskProfile !== undefined && typeof supplied.riskProfile !== "string") ||
+          (supplied.identity !== undefined && typeof supplied.identity !== "string")) {
+          throw new Error("Invalid proposal material");
+        }
+        const created = createExecutionProposal(supplied);
+        if (supplied.identity !== undefined && supplied.identity !== created.identity) {
+          return fail("INVALID_PROPOSAL_IDENTITY", "Proposal identity does not match its material fields.");
+        }
+        return okStructured({ state: await getJevStop(workspace.id, created.executionLineId, created) ? "STOPPED" : "CLEAR" });
+      } catch (error) {
+        if (error instanceof WorkspaceError) return mapError(error);
+        return fail("JEV_STOP_STATUS_FAILED", error instanceof Error ? error.message : String(error));
+      }
+    }
+  );
+
+  server.registerTool(
     "jev_decision_gate",
     {
       title: "Jev decision gate",

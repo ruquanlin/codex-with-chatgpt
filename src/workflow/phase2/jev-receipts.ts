@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getStateDir } from "../../config/paths.js";
 import type { JevGateInput, JevGateResult } from "../../decision/jev-gate.js";
@@ -71,6 +71,20 @@ async function secret(workspaceId: string): Promise<Buffer> {
   return key;
 }
 
+async function existingSecret(workspaceId: string): Promise<Buffer | null> {
+  const file = path.join(dir(workspaceId), "issuer.key");
+  try {
+    const info = await stat(file);
+    if (!info.isFile()) throw new Error("Invalid Jev receipt issuer key");
+    const key = await readFile(file);
+    if (key.length !== 32) throw new Error("Invalid Jev receipt issuer key");
+    return key;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 function sign<T>(record: T, key: Buffer): Signed<T> {
   return { record, mac: createHmac("sha256", key).update(JSON.stringify(record)).digest("hex") };
 }
@@ -134,16 +148,31 @@ function validateStop(marker: StopMarker, workspaceId: string): void {
 }
 
 export async function getJevStop(workspaceId: string, lineId: string, proposal?: ExecutionProposal): Promise<StopMarker | null> {
-  const key = await secret(workspaceId);
-  const lineMarker = await readSigned<StopMarker>(stopPath(workspaceId, lineId), key);
+  const namespace = workspaceKey(workspaceId);
+  const lineFile = stopPath(namespace, lineId);
+  const fingerprint = proposal ? investigationFingerprint(proposal) : undefined;
+  const investigationFile = fingerprint ? investigationStopPath(namespace, fingerprint) : undefined;
+  if (proposal && proposal.executionLineId !== lineId) throw new Error("Invalid Jev stop lookup");
+  const [lineExists, investigationExists] = await Promise.all([
+    stat(lineFile).then(() => true, (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    }),
+    investigationFile ? stat(investigationFile).then(() => true, (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    }) : Promise.resolve(false),
+  ]);
+  if (!lineExists && !investigationExists) return null;
+  const key = await existingSecret(namespace);
+  if (!key) throw new Error("Jev stop marker exists without an issuer key");
+  const lineMarker = await readSigned<StopMarker>(lineFile, key);
   if (lineMarker) {
     validateStop(lineMarker, workspaceId);
     if (lineMarker.executionLineId !== lineId) throw new Error("Invalid Jev stop marker");
   }
   if (!proposal) return lineMarker;
-  if (proposal.executionLineId !== lineId) throw new Error("Invalid Jev stop lookup");
-  const fingerprint = investigationFingerprint(proposal);
-  const investigationMarker = await readSigned<StopMarker>(investigationStopPath(workspaceId, fingerprint), key);
+  const investigationMarker = await readSigned<StopMarker>(investigationFile!, key);
   if (investigationMarker) {
     validateStop(investigationMarker, workspaceId);
     if (investigationMarker.investigationFingerprint !== fingerprint) throw new Error("Invalid Jev stop marker");

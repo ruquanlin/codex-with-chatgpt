@@ -117,6 +117,7 @@ describe("MCP tools over Streamable HTTP", () => {
       "git_diff",
       "git_status",
       "jev_decision_gate",
+      "jev_stop_status",
       "list_directory",
       "phase2_execution_brief",
       "phase2_preflight",
@@ -152,6 +153,8 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "build_project", ["passed", "exitCode", "stdout", "stderr"]);
     expectToolOutputSchema(tools, "run_lint", ["passed", "exitCode", "stdout", "stderr"]);
     expectToolOutputSchema(tools, "jev_decision_gate", ["available", "decision", "confidence", "probabilities"]);
+    expectToolOutputSchema(tools, "jev_stop_status", ["state"]);
+    expect(tools.find((tool) => tool.name === "jev_stop_status")?.annotations?.readOnlyHint).toBe(true);
     expectToolOutputSchema(tools, "execution_brief_validate", ["valid", "brief"]);
     expectToolOutputSchema(tools, "phase2_transition", ["state", "proposal"]);
     expectToolOutputSchema(tools, "phase2_preflight", ["state", "reasonCodes", "receiptId"]);
