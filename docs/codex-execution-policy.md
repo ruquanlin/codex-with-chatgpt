@@ -22,7 +22,7 @@ does not bypass workspace identity or connector safety checks.
 
 ## 1A. C2C Preflight Additions
 
-Before a C2C-specific action, verify the connected workspace/connector identity and any C2C-only acceptance gate relevant to that action. Apply the mandatory Jev gate below when its trigger conditions are met.
+Before a C2C-specific action, verify the connected workspace/connector identity and any C2C-only acceptance gate relevant to that action. Jev is optional advisory input only when the user explicitly requests consultation; it is not part of ordinary development, debugging, or approved fixes.
 
 Generic scope, cost, model, validation, and prompt-generation preflight rules come from the active global workflow, not from this document.
 
@@ -47,35 +47,23 @@ remains idempotent, and persisted metadata remains readable through
 `execution_summary` / `test_status`; command output remains the separate
 `execution_output` path when applicable.
 
-## 2A. Mandatory Jev Decision Gate
+## 2A. Optional Jev Advisory
 
-Jev is a mandatory pre-Codex decision gate for debugging work that risks
-becoming speculative, repetitive, or wasteful.
+Jev may be consulted only when the user explicitly requests it. Difficult or
+unclear bugs, production incidents, follow-up work, and repeated investigation
+do not by themselves require a Jev call. Use deterministic Preflight and the
+existing workspace, identity, historical Stop, failure, authorization, and
+handoff-proof checks for execution readiness.
 
-Do **not** call Jev for ordinary, well-scoped, deterministic tasks.
+The `jev_decision_gate` response is advisory. `proceed`, `reframe`, and `stop`
+are not execution authorization, do not issue a Jev Receipt, and cannot create
+a new Stop Marker. Jev unavailability alone does not block a task that passes
+the applicable deterministic checks.
 
-Jev **must** be called before creating or sending another Codex task when any
-of these conditions applies:
-
-- the issue is a difficult or unclear bug;
-- the issue is a production/runtime incident;
-- at least one diagnosis/investigation round has already completed and another
-  diagnosis, repair, or follow-up Codex round is being considered;
-- the current investigation is repeating similar checks without materially
-  reducing uncertainty.
-
-The `jev_decision_gate` result controls the next step:
-
-- `proceed`: Codex may continue with the proposed task;
-- `reframe`: do not send the current task. Narrow or change the task using the
-  evidence, then run the gate again before Codex;
-- `stop`: do not create another Codex task for the current line of investigation;
-- `available: false`: do not silently bypass the gate. Report that Jev is
-  unavailable and stop automatic continuation. Proceed without Jev only when
-  the user explicitly instructs C2C to bypass the gate.
-
-This rule is mandatory even when another workflow rule would otherwise suggest
-continuing diagnosis, escalating model strength, or attempting another fix.
+Existing historical Stop Markers continue to block their affected execution
+lines under the original checks. Preflight is not proof that the user approved
+an external or high-impact action; deployment, deletion, production changes,
+and other external side effects still require the applicable user approval.
 
 ---
 

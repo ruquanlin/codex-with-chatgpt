@@ -19,20 +19,23 @@ The default workflow is:
 5. End-to-End Verification
 6. Commit / Push
 
-### Mandatory Jev gate before repeated/production debugging
+### Optional Jev advice
 
-Before creating another Codex task, run `jev_decision_gate` when the issue is
-a difficult/unclear bug, a production/runtime incident, a diagnosis round has
-already completed and another Codex round is being considered, or the
-investigation is repeating similar checks without reducing uncertainty.
+Consult `jev_decision_gate` only when the user explicitly asks for Jev advice.
+Debugging difficulty, production context, follow-up work, and repeated checks
+do not automatically require Jev. Use deterministic Preflight and existing
+authorization, historical Stop, failure, and Handoff Proof checks to decide
+whether execution is ready.
 
-Gate handling is strict:
+Jev output is advisory only:
 
-- `proceed`: continue with the proposed Codex task;
-- `reframe`: do not send the current task; narrow/change it and run the gate again;
-- `stop`: stop this line of Codex investigation;
-- `available: false`: do not silently continue. Report the unavailable gate and
-  stop automatic continuation unless the user explicitly asks to bypass Jev.
+- `proceed`, `reframe`, and `stop` do not authorize execution or create a Jev
+  Receipt or Stop Marker;
+- Jev being unavailable does not independently block an otherwise authorized
+  task;
+- historical Stop Markers continue to block affected execution lines;
+- deployment, deletion, production changes, and other external side effects
+  still require the applicable user approval.
 
 Ordinary well-scoped deterministic tasks do not require Jev.
 

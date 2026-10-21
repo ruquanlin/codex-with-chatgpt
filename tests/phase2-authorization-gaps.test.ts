@@ -25,21 +25,23 @@ afterEach(() => {
 
 describe("Phase 2 authorization gaps", () => {
   it.each([
-    ["difficultOrUnclearBug", "调查原因不明的 Bug"],
-    ["difficultOrUnclearBug", "排查疑难故障"],
+    ["difficultOrUnclearBug", "修复复杂 Bug，已复现并确认导出处理器是故障边界"],
+    ["difficultOrUnclearBug", "排查疑难故障，已由现有日志定位到导出处理器"],
     ["productionOrRuntimeIncident", "处理生产环境运行时事故"],
     ["productionOrRuntimeIncident", "处理生产事故"],
     ["completedPriorDiagnosisAndFollowupCodex", "完成上一轮诊断后继续修复同一问题"],
     ["completedPriorDiagnosisAndFollowupCodex", "此前已诊断，继续修复同一问题"],
     ["repetitiveInvestigationWithoutProgress", "同一问题反复调查仍无实质进展"],
     ["repetitiveInvestigationWithoutProgress", "反复排查仍没有实质进展"],
-  ] as const)("recognizes Chinese %s evidence", async (reason, evidence) => {
+  ] as const)("does not require Jev for Chinese %s labels", async (reason, evidence) => {
     stateDir = isolateStateDir();
-    const proposal = createExecutionProposal(proposalInput);
+    const proposal = createExecutionProposal(reason === "productionOrRuntimeIncident"
+      ? { ...proposalInput, riskProfile: "Production incident; permitted action is read-only log analysis; stop before writes and verify the affected endpoint" }
+      : proposalInput);
     const input = { ...preflight, taskEvidence: [evidence] };
     expect(assessPreflight(proposal, input))
-      .toMatchObject({ state: "REQUIRES_JEV", reasonCodes: expect.arrayContaining([reason]) });
-    await expect(issuePreflightReceipt(workspaceId, proposal, input)).rejects.toThrow("Preflight is not NOT_REQUIRED");
+      .toMatchObject({ state: "NOT_REQUIRED", reasonCodes: ["DETERMINISTIC_PREFLIGHT_PASSED"] });
+    expect((await issuePreflightReceipt(workspaceId, proposal, input)).version).toBe(4);
   });
 
   it("invalidates a v1 proof for a related cross-line Stop", async () => {
