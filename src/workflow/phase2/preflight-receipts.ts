@@ -95,11 +95,16 @@ function assessMaterials(proposal: ExecutionProposal, input: PreflightInput): { 
   if ([proposal.goal, proposal.approvedBasis.summary, ...proposal.scope.inScope].some(unsafeRequestedAction)) {
     return { state: "BLOCKED_VALIDATION", reasonCodes: ["UNSAFE_AUTHORIZATION_REQUEST"] };
   }
-  const highRisk = /\b(production|security|authorization|authentication|data integrity|irreversible|delete|deletion|deploy|deployment|external side effect|customer data)\b/i.test(taskMaterial) ||
-    /(生产|安全|授权|认证|数据完整性|不可逆|删除|部署|外部副作用|客户数据)/.test(taskMaterial) ||
+  const riskScanMaterial = taskMaterial
+    .replace(/\b(?:do not|don't|never|must not|should not)\b[^.;!?。！？]*(?:\bdeploy(?:ment)?\b|\bproduction\b|\bdelete(?:ion)?\b)/gi, "")
+    .replace(/\b(?:stop if|stop when|unless)\b[^.;!?。！？]*(?:\bdeploy(?:ment|ing)?\b|\bproduction\b|\bdelete(?:ing|ion)?\b)/gi, "")
+    .replace(/\b(?:without|avoid|prevent)\b[^.;!?。！？]*(?:\bdeploy(?:ment|ing)?\b|\bproduction\b|\bdelet(?:e|ing|ion)\b)/gi, "")
+    .replace(/(?:不要|不得|禁止|避免|不可以|不可)[^，。；;！？!?]*(?:生产部署|部署|生产变更|删除)/g, "");
+  const highRisk = /\b(production|security|authorization|authentication|data integrity|irreversible|delete|deletion|deploy|deployment|external side effect|customer data)\b/i.test(riskScanMaterial) ||
+    /(生产|安全|授权|认证|数据完整性|不可逆|删除|部署|外部副作用|客户数据)/.test(riskScanMaterial) ||
     input.productionOrRuntimeIncident === true;
   if (highRisk) {
-    const riskText = [proposal.riskProfile ?? "", ...proposal.scope.inScope, ...proposal.implementationBasis, ...input.taskEvidence,
+    const riskText = [proposal.riskProfile ?? "", ...proposal.scope.inScope, ...proposal.scope.outOfScope, ...proposal.implementationBasis, ...input.taskEvidence,
       ...input.acceptanceCriteria].join(" ");
     const explicitBoundary = /\b(read.only|limited to|only\s+(?:read|inspect|review|query|collect|compare)|permitted actions? (?:are|is|:)|allowed actions? (?:are|is|:))\b/i.test(riskText) ||
       /(允许.{0,12}(仅|只读)|仅限|只读|限制范围|操作边界)/.test(riskText);

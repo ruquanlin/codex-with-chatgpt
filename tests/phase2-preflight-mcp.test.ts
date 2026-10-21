@@ -97,6 +97,30 @@ describe("trusted conditional preflight over MCP", () => {
     expect(await preflightCall(completeRisk, riskEvidence)).toMatchObject({ state: "NOT_REQUIRED", receiptId: expect.any(String) });
   });
 
+  it("does not treat prohibited deployment language in an ordinary UI task as high risk", async () => {
+    const uiChange = { ...proposal("portfolio-ui"), goal: "Update the Portfolio dashboard status card layout",
+      scope: { inScope: ["Adjust spacing and labels in the Portfolio dashboard"],
+        outOfScope: ["Do not deploy this change or modify production applications"] },
+      implementationBasis: ["Use existing Portfolio UI components"],
+      riskProfile: "Local UI-only change; stop if deployment or production access is needed" };
+    const evidence = { taskEvidence: ["The requested change only affects dashboard presentation"],
+      acceptanceCriteria: ["The status card spacing and labels match the requested design"] };
+    expect(await preflightCall(uiChange, evidence)).toMatchObject({ state: "NOT_REQUIRED", receiptId: expect.any(String) });
+  });
+
+  it("keeps actual deployment operations high risk and accepts boundaries stated in outOfScope", async () => {
+    const deployment = { ...proposal("actual-deployment"), goal: "Deploy the Portfolio application to production",
+      scope: { inScope: ["Deploy the approved Portfolio build"],
+        outOfScope: ["Do not change application code; stop if deployment health checks fail; verify the production release"] },
+      implementationBasis: ["Use the approved production release process"],
+      riskProfile: "Production deployment; permitted action is release execution; stop if health checks fail" };
+    const evidence = { taskEvidence: ["Execute the approved deployment and inspect release health"],
+      acceptanceCriteria: ["Verify the production release health checks pass"] };
+    expect(await preflightCall(deployment, evidence)).toMatchObject({ state: "NOT_REQUIRED", receiptId: expect.any(String) });
+    expect(await preflightCall({ ...deployment, riskProfile: undefined }, evidence))
+      .toMatchObject({ state: "NEEDS_TASK_DETAILS", reasonCodes: ["RISK_BOUNDARY_OR_STOP_CONDITION_MISSING"] });
+  });
+
   it("allows a bounded read-only diagnosis when the root cause is unknown", async () => {
     const diagnostic = { ...proposal("unknown-root-cause"), goal: "Investigate intermittent export endpoint 500 errors; root cause unknown",
       scope: { inScope: ["Read export service logs and request traces"], outOfScope: ["Do not modify code, data, or production configuration"] },
