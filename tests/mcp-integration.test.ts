@@ -7,6 +7,7 @@ import { startBridge, type Bridge } from "../src/bridge/server.js";
 import { appendExecutionRecord } from "../src/execution/records.js";
 import { saveExecutionOutput } from "../src/execution/output.js";
 import { createExecutionProposal } from "../src/workflow/phase2.js";
+import { issueJevReceipt } from "../src/workflow/phase2/jev-receipts.js";
 import { makeTmpDir, cleanup, write, makeGitRepo, git, isolateStateDir } from "./helpers.js";
 
 let root: string;
@@ -40,6 +41,19 @@ function expectToolOutputSchema(
     | undefined;
   expect(schema?.type).toBe("object");
   expect(Object.keys(schema?.properties ?? {})).toEqual(expect.arrayContaining(properties));
+}
+
+async function issuePreflightAuthorization(proposal: Record<string, any>) {
+  const preflight = {
+    acceptanceCriteria: ["The focused integration check passes"],
+    taskEvidence: ["The bounded target behavior is represented by this isolated fixture"],
+  };
+  const issued = structuredJsonOf<{ state: string; receiptId?: string }>(await client.callTool({
+    name: "phase2_preflight", arguments: { proposal, preflight },
+  }));
+  expect(issued.state).toBe("NOT_REQUIRED");
+  expect(issued.receiptId).toEqual(expect.any(String));
+  return { preflightReceiptId: issued.receiptId, preflight };
 }
 
 beforeAll(async () => {
@@ -147,7 +161,8 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "phase4a_failure_history", ["failures"]);
     expectToolOutputSchema(tools, "phase4b_route_completion", ["executionLineId", "proposalIdentity", "state", "outcome"]);
     expectToolOutputSchema(tools, "phase4c_get_project_profile", ["status"]);
-    expect(tools.find((tool) => tool.name === "phase4c_get_project_profile")?.inputSchema.properties).toEqual({});
+    expect(tools.find((tool) => tool.name === "phase4c_get_project_profile")?.inputSchema.properties)
+      .toMatchObject({ workspace_id: { not: {} } });
     expect(tools.find((tool) => tool.name === "phase4c_get_project_profile")?.annotations?.readOnlyHint).toBe(true);
     expect(tools.find((tool) => tool.name === "phase4b_route_completion")?.annotations?.readOnlyHint).toBe(true);
     expect(tools.find((tool) => tool.name === "phase4a_failure_history")?.annotations?.readOnlyHint).toBe(true);
@@ -309,7 +324,7 @@ describe("MCP tools over Streamable HTTP", () => {
       for (const name of ["phase2_transition", "phase2_execution_brief"] as const) {
         const args = name === "phase2_transition"
           ? { proposal: nextProposal }
-          : { proposal: nextProposal, details, boundJevResult: { proposalIdentity: createExecutionProposal(nextProposal).identity, result: { available: true, decision: "proceed" } } };
+          : { proposal: nextProposal, details, boundJevResult: { preflightReceiptId: "0".repeat(48) } };
         const blocked = await client.callTool({ name, arguments: args });
         expect(blocked.isError).toBe(true);
         expect(jsonOf<{ error: string }>(blocked).error).toBe("FAILED_EXECUTION_LINE");
@@ -389,11 +404,15 @@ describe("MCP tools over Streamable HTTP", () => {
       const recordId = failureIdFor(bridge.workspace.id, historyProposal.executionLineId);
       const failurePath = path.join(stateDir, "failures", bridge.workspace.id, `${recordId}.json`);
       fs.mkdirSync(path.dirname(failurePath), { recursive: true });
-      fs.writeFileSync(failurePath, "{corrupt");
-      const result = await route(historyProposal);
-      expect(result.isError).toBe(true);
-      expect(jsonOf<{ error: string }>(result).error).toBe("FAILURE_HISTORY_FAILED");
-      expect(failureId).toBeTruthy();
+      try {
+        fs.writeFileSync(failurePath, "{corrupt");
+        const result = await route(historyProposal);
+        expect(result.isError).toBe(true);
+        expect(jsonOf<{ error: string }>(result).error).toBe("FAILURE_HISTORY_FAILED");
+        expect(failureId).toBeTruthy();
+      } finally {
+        fs.rmSync(failurePath, { force: true });
+      }
     });
 
     it("overrides completion with the existing Failure Record", async () => {
@@ -547,10 +566,9 @@ describe("MCP tools over Streamable HTTP", () => {
 
     it("blocks failed execution lines at both Phase 2 entry points while allowing a fresh identity", async () => {
       const proposalA = proposalFor("phase4a-terminal-line");
-      const identityA = createExecutionProposal(proposalA).identity;
-      const jevForA = { proposalIdentity: identityA, result: { available: true, decision: "proceed" } };
+      const authA = await issuePreflightAuthorization(proposalA);
       const initialA = structuredJsonOf<{ state: string }>(await client.callTool({
-        name: "phase2_transition", arguments: { proposal: proposalA, boundJevResult: jevForA },
+        name: "phase2_transition", arguments: { proposal: proposalA, boundJevResult: authA },
       }));
       expect(initialA.state).toBe("READY_FOR_EXECUTION");
 
@@ -558,7 +576,7 @@ describe("MCP tools over Streamable HTTP", () => {
       expect(structuredJsonOf<{ failures: { executionLineId: string }[] }>(await history({ executionLineId: proposalA.executionLineId })).failures.map((entry) => entry.executionLineId)).toEqual([proposalA.executionLineId]);
 
       const changedGoal = { ...proposalA, goal: "Redesign the handler" };
-      const transitionBlocked = await client.callTool({ name: "phase2_transition", arguments: { proposal: changedGoal, boundJevResult: jevForA } });
+      const transitionBlocked = await client.callTool({ name: "phase2_transition", arguments: { proposal: changedGoal, boundJevResult: authA } });
       expect(transitionBlocked.isError).toBe(true);
       expect(jsonOf<{ error: string }>(transitionBlocked).error).toBe("FAILED_EXECUTION_LINE");
 
@@ -568,26 +586,25 @@ describe("MCP tools over Streamable HTTP", () => {
         persistence: { mode: "ephemeral" },
       };
       const changedScope = { ...proposalA, scope: { inScope: ["handler", "router"], outOfScope: ["redesign"] } };
-      const changedScopeIdentity = createExecutionProposal(changedScope).identity;
       const briefBlocked = await client.callTool({ name: "phase2_execution_brief", arguments: {
         proposal: changedScope,
-        boundJevResult: { proposalIdentity: changedScopeIdentity, result: { available: true, decision: "proceed" } },
+        boundJevResult: { preflightReceiptId: "0".repeat(48) },
         details: briefDetails,
       } });
       expect(briefBlocked.isError).toBe(true);
       expect(jsonOf<{ error: string }>(briefBlocked).error).toBe("FAILED_EXECUTION_LINE");
 
-      const repeatedBlocked = await client.callTool({ name: "phase2_transition", arguments: { proposal: proposalA, boundJevResult: jevForA } });
+      const repeatedBlocked = await client.callTool({ name: "phase2_transition", arguments: { proposal: proposalA, boundJevResult: authA } });
       expect(repeatedBlocked.isError).toBe(true);
       expect(jsonOf<{ error: string }>(repeatedBlocked).error).toBe("FAILED_EXECUTION_LINE");
       expect(structuredJsonOf<{ failures: { executionLineId: string }[] }>(await history({ executionLineId: proposalA.executionLineId })).failures).toHaveLength(1);
 
       const proposalB = proposalFor("phase4a-fresh-line");
       const oldJevOnB = structuredJsonOf<{ state: string }>(await client.callTool({
-        name: "phase2_transition", arguments: { proposal: proposalB, boundJevResult: jevForA },
+        name: "phase2_transition", arguments: { proposal: proposalB, boundJevResult: authA },
       }));
       expect(oldJevOnB.state).toBe("EXECUTION_PROPOSED");
-      const jevForB = { proposalIdentity: createExecutionProposal(proposalB).identity, result: { available: true, decision: "proceed" } };
+      const jevForB = await issuePreflightAuthorization(proposalB);
       const freshB = structuredJsonOf<{ state: string }>(await client.callTool({
         name: "phase2_transition", arguments: { proposal: proposalB, boundJevResult: jevForB },
       }));
@@ -642,19 +659,20 @@ describe("MCP tools over Streamable HTTP", () => {
     });
     const phase2Ready = async (proposal: ReturnType<typeof proposalFor>) => {
       const identity = createExecutionProposal(proposal).identity;
+      const authorization = await issuePreflightAuthorization(proposal);
       const result = structuredJsonOf<{ state: string; proposal: { identity: string } }>(await client.callTool({
-        name: "phase2_transition", arguments: { proposal, boundJevResult: { proposalIdentity: identity, result: { available: true, decision: "proceed" } } },
+        name: "phase2_transition", arguments: { proposal, boundJevResult: authorization },
       }));
       expect(result).toMatchObject({ state: "READY_FOR_EXECUTION", proposal: { identity } });
-      return identity;
+      return { identity, authorization };
     };
     try {
       const success = proposalFor("cross-phase-e2e-success");
-      const successIdentity = await phase2Ready(success);
+      const { identity: successIdentity, authorization: successAuthorization } = await phase2Ready(success);
       const brief = structuredJsonOf<{ state: string; brief: Record<string, unknown>; persistence: { path?: string } }>(await client.callTool({
         name: "phase2_execution_brief", arguments: {
           proposal: success,
-          boundJevResult: { proposalIdentity: successIdentity, result: { available: true, decision: "proceed" } }, details,
+          boundJevResult: successAuthorization, details,
         },
       }));
       expect(brief.state).toBe("READY_FOR_EXECUTION");
@@ -663,7 +681,7 @@ describe("MCP tools over Streamable HTTP", () => {
       expect(fs.existsSync(path.join(root, "docs", "workflow", "execution-briefs"))).toBe(false);
       expect(structuredJsonOf<{ status: string; package?: unknown }>(await client.callTool({
         name: "phase3_compile_execution", arguments: { brief: brief.brief },
-      }))).toMatchObject({ status: "REJECTED_INSUFFICIENT_BRIEF" });
+      }))).toMatchObject({ status: "READY", package: expect.any(Object) });
 
       const completionArgs = (completion: Record<string, unknown>) => ({
         name: "phase4b_route_completion",
@@ -680,7 +698,7 @@ describe("MCP tools over Streamable HTTP", () => {
       }))).toMatchObject({ state: "COMPLETED", outcome: "CLOSED" });
 
       const failed = proposalFor("cross-phase-e2e-failure");
-      const failedIdentity = await phase2Ready(failed);
+      const { identity: failedIdentity, authorization: failedAuthorization } = await phase2Ready(failed);
       expect(failedIdentity).toBe(createExecutionProposal(failed).identity);
       const needsRecord = structuredJsonOf<{ state: string; outcome: string }>(await client.callTool({
         name: "phase4b_route_completion", arguments: { proposal: failed, completion: completionFor(failed, { validation: { status: "FAILED", evidence: ["simulated validation failure"] } }) },
@@ -700,7 +718,7 @@ describe("MCP tools over Streamable HTTP", () => {
         name: "phase4b_route_completion", arguments: { proposal: failed, completion: completionFor(failed) },
       }))).toMatchObject({ state: "FAILED", outcome: "NEW_DECISION_REQUIRED" });
       const reuse = await client.callTool({ name: "phase2_transition", arguments: {
-        proposal: failed, boundJevResult: { proposalIdentity: failedIdentity, result: { available: true, decision: "proceed" } },
+        proposal: failed, boundJevResult: failedAuthorization,
       } });
       expect(reuse.isError).toBe(true);
       expect(jsonOf<{ error: string }>(reuse).error).toBe("FAILED_EXECUTION_LINE");
@@ -709,7 +727,7 @@ describe("MCP tools over Streamable HTTP", () => {
         setProfile(state);
         expect(structuredJsonOf<{ status: string }>(await client.callTool({ name: "phase4c_get_project_profile", arguments: {} })).status).toBe(state);
         const probe = proposalFor(`cross-phase-profile-${state}`);
-        const identity = await phase2Ready(probe);
+        const { identity } = await phase2Ready(probe);
         expect(structuredJsonOf<{ state: string }>(await client.callTool({
           name: "phase4b_route_completion", arguments: { proposal: probe, completion: completionFor(probe, { review: { status: "PENDING" }, acceptance: { required: true, status: "PENDING" } }) },
         })).state).toBe("REVIEW_PENDING");
@@ -717,7 +735,7 @@ describe("MCP tools over Streamable HTTP", () => {
           name: "phase4b_route_completion", arguments: { proposal: probe, completion: completionFor(probe, { acceptance: { required: true, status: "ACCEPTED", evidence: ["simulated acceptance"] } }) },
         })).state).toBe("COMPLETED");
         const failedProbe = proposalFor(`cross-phase-profile-failed-${state}`);
-        const failedProbeIdentity = await phase2Ready(failedProbe);
+        const { identity: failedProbeIdentity } = await phase2Ready(failedProbe);
         await client.callTool({ name: "phase4a_record_failure", arguments: { proposal: failedProbe, failure: {
           executionLineId: failedProbe.executionLineId, proposalIdentity: failedProbeIdentity,
           failureType: "EXECUTION_FAILURE", failedAtStage: "EXECUTION", summary: "Simulated failure",
@@ -838,7 +856,7 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(fs.existsSync(path.join(root, "docs", "workflow", "execution-briefs"))).toBe(false);
   });
 
-  it("runs the Phase 2 transition and creates a brief only for the matching Jev-approved proposal", async () => {
+  it("runs Phase 2 only with a matching server-issued Preflight v4 receipt", async () => {
     const proposal = {
       executionLineId: "mcp-line-1", goal: "Fix the handler",
       scope: { inScope: ["handler"], outOfScope: ["redesign"] },
@@ -852,21 +870,22 @@ describe("MCP tools over Streamable HTTP", () => {
       acceptanceCriteria: ["Focused test passes"], validationExpectation: ["Run focused test"], riskNotes: ["Low risk"],
       persistence: { mode: "ephemeral" },
     };
+    const authorization = await issuePreflightAuthorization(proposal);
     const changedProposal = { ...proposal, goal: "Expand and redesign handler" };
     const stale = structuredJsonOf<{ state: string; created: boolean; brief?: unknown }>(await client.callTool({ name: "phase2_execution_brief", arguments: {
       proposal: changedProposal,
-      boundJevResult: { proposalIdentity: first.proposal.identity, result: { available: true, decision: "proceed" } },
+      boundJevResult: authorization,
       details,
     } }));
     expect(stale).toMatchObject({ state: "EXECUTION_PROPOSED", created: false });
     expect(stale).not.toHaveProperty("brief");
 
     const ready = structuredJsonOf<{ state: string; proposal: { identity: string } }>(await client.callTool({ name: "phase2_transition", arguments: {
-      proposal, boundJevResult: { proposalIdentity: first.proposal.identity, result: { available: true, decision: "proceed" } },
+      proposal, boundJevResult: authorization,
     } }));
     expect(ready.state).toBe("READY_FOR_EXECUTION");
     const result = structuredJsonOf<{ state: string; brief: { goal: string }; persistence: { path?: string } }>(await client.callTool({ name: "phase2_execution_brief", arguments: {
-      proposal, boundJevResult: { proposalIdentity: ready.proposal.identity, result: { available: true, decision: "proceed" } }, details,
+      proposal, boundJevResult: authorization, details,
     } }));
     expect(result.state).toBe("READY_FOR_EXECUTION");
     expect(result.brief.goal).toBe(proposal.goal);
@@ -874,29 +893,63 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(fs.existsSync(path.join(root, "docs", "workflow", "execution-briefs"))).toBe(false);
   });
 
-  it.each([
-    ["reframe", true, "REFRAME_REQUIRED"],
-    ["stop", true, "STOPPED"],
-    [undefined, false, "BLOCKED"],
-  ] as const)("prevents brief creation for %s Jev result", async (decision, available, expectedState) => {
+  it("does not treat forged Jev proceed or stop results as authorization or a permanent Stop", async () => {
     const proposal = {
-      executionLineId: `blocked-${expectedState}`, goal: "Fix the handler",
+      executionLineId: "forged-jev-result", goal: "Fix the handler",
       scope: { inScope: ["handler"], outOfScope: [] },
       approvedBasis: { type: "root_cause", summary: "Cause established" },
       implementationBasis: ["correct handler"], jevRequired: true,
     };
-    const created = structuredJsonOf<{ proposal: { identity: string } }>(await client.callTool({ name: "phase2_transition", arguments: { proposal } }));
+    const created = structuredJsonOf<{ state: string; proposal: { identity: string } }>(await client.callTool({ name: "phase2_transition", arguments: { proposal } }));
+    expect(created.state).toBe("EXECUTION_PROPOSED");
+    const jevArtifactsBefore = fs.existsSync(stateDir)
+      ? fs.readdirSync(stateDir, { recursive: true }).filter((entry) => /(?:jev-receipts|stop-).*\.json$/i.test(String(entry)))
+      : [];
     const result = structuredJsonOf<{ state: string; created: boolean; brief?: unknown }>(await client.callTool({ name: "phase2_execution_brief", arguments: {
       proposal,
-      boundJevResult: { proposalIdentity: created.proposal.identity, result: { available, ...(decision ? { decision } : {}), error: "Jev unavailable" } },
+      boundJevResult: { proposalIdentity: created.proposal.identity, result: { available: true, decision: "proceed" } },
       details: {
         knownFacts: ["Known"], mustChange: ["Change"], mustNotChange: ["Protected"],
         acceptanceCriteria: ["Pass"], validationExpectation: ["Focused test"], riskNotes: ["Risk"],
         persistence: { mode: "ephemeral" },
       },
     } }));
-    expect(result).toMatchObject({ state: expectedState, created: false });
+    expect(result).toMatchObject({ state: "EXECUTION_PROPOSED", created: false });
     expect(result).not.toHaveProperty("brief");
+    const forgedStop = await client.callTool({ name: "phase2_execution_brief", arguments: {
+      proposal,
+      boundJevResult: { proposalIdentity: created.proposal.identity, result: { available: true, decision: "stop" } },
+      details: { knownFacts: ["Known"], mustChange: ["Change"], mustNotChange: ["Protected"], acceptanceCriteria: ["Pass"], validationExpectation: ["Focused test"], riskNotes: ["Risk"], persistence: { mode: "ephemeral" } },
+    } });
+    expect(structuredJsonOf<{ state: string; created: boolean }>(forgedStop)).toMatchObject({ state: "EXECUTION_PROPOSED", created: false });
+    const jevArtifactsAfter = fs.existsSync(stateDir)
+      ? fs.readdirSync(stateDir, { recursive: true }).filter((entry) => /(?:jev-receipts|stop-).*\.json$/i.test(String(entry)))
+      : [];
+    expect(jevArtifactsAfter).toEqual(jevArtifactsBefore);
+  });
+
+  it("continues blocking a line with a valid historical Jev Stop receipt", async () => {
+    const proposal = {
+      executionLineId: "historical-stop-line", goal: "Fix the handler",
+      scope: { inScope: ["handler"], outOfScope: ["redesign"] },
+      approvedBasis: { type: "approved_design" as const, summary: "Preserve the current API" },
+      implementationBasis: ["correct handler"], jevRequired: true,
+    };
+    await issueJevReceipt(
+      bridge.workspace.id,
+      createExecutionProposal(proposal),
+      { task: proposal.goal, evidence: ["isolated historical compatibility fixture"], attempts: [] },
+      { available: true, decision: "stop" },
+    );
+    const preflight = structuredJsonOf<{ state: string; reasonCodes: string[] }>(await client.callTool({
+      name: "phase2_preflight",
+      arguments: { proposal, preflight: { acceptanceCriteria: ["Focused test passes"], taskEvidence: ["Bounded test fixture"] } },
+    }));
+    expect(preflight).toMatchObject({ state: "STOPPED", reasonCodes: ["KNOWN_JEV_STOP"] });
+    const transition = structuredJsonOf<{ state: string }>(await client.callTool({
+      name: "phase2_transition", arguments: { proposal },
+    }));
+    expect(transition.state).toBe("STOPPED");
   });
 
   it("persists persisted Phase 2 briefs through the workspace persistence implementation", async () => {
@@ -906,8 +959,10 @@ describe("MCP tools over Streamable HTTP", () => {
       approvedBasis: { type: "explicit_instruction", summary: "Explicit bounded request" },
       implementationBasis: ["change handler"], jevRequired: false,
     };
+    const authorization = await issuePreflightAuthorization(proposal);
     const result = structuredJsonOf<{ state: string; brief: { persistence: { mode: string } }; persistence: { path?: string; reference?: string } }>(await client.callTool({ name: "phase2_execution_brief", arguments: {
       proposal,
+      boundJevResult: authorization,
       details: {
         knownFacts: ["Handler exists"], mustChange: ["Correct handler"], mustNotChange: ["API"],
         acceptanceCriteria: ["Focused test passes"], validationExpectation: ["Run focused test"], riskNotes: ["Bounded"],

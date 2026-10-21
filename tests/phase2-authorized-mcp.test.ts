@@ -6,9 +6,9 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { startBridge, type Bridge } from "../src/bridge/server.js";
 import { createExecutionProposal } from "../src/workflow/phase2.js";
 import { briefDigest, readHandoffProof } from "../src/workflow/phase2/handoff-proof.js";
+import { issueJevReceipt } from "../src/workflow/phase2/jev-receipts.js";
 import { cleanup, isolateStateDir, makeGitRepo, makeTmpDir } from "./helpers.js";
 
-const originalFetch = globalThis.fetch;
 let bridge: Bridge, client: Client, root: string, stateDir: string;
 
 function body(result: { content?: unknown }): Record<string, unknown> {
@@ -34,25 +34,9 @@ async function transition(p: ReturnType<typeof proposal>, boundJevResult?: unkno
 async function brief(p: ReturnType<typeof proposal>, boundJevResult?: unknown) {
   return body(await client.callTool({ name: "phase2_execution_brief", arguments: { proposal: p, boundJevResult, details } }));
 }
-function fakeEndpoint(decision: "proceed" | "reframe" | "stop") {
-  globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
-    if (String(url) === "https://api.typesafe.ai/v1/systemone") {
-      if (!init?.body) throw new Error("Missing Jev request");
-      return new Response(JSON.stringify({ answers: { gate: { choice: decision } } }), {
-        status: 200, headers: { "content-type": "application/json" },
-      });
-    }
-    return originalFetch(url, init);
-  }) as typeof fetch;
-}
 async function issue(p: ReturnType<typeof proposal>): Promise<string> {
-  const result = body(await client.callTool({
-    name: "jev_decision_gate",
-    arguments: { task: p.goal, evidence: ["fresh observed integration"], attempts: [], proposal: p },
-  }));
-  expect(result.available).toBe(true);
-  expect(typeof result.receiptId).toBe("string");
-  return result.receiptId as string;
+  return (await issueJevReceipt(bridge.workspace.id, createExecutionProposal(p),
+    { task: p.goal, evidence: ["fresh observed integration"], attempts: [] }, { available: true, decision: "proceed" })).receiptId;
 }
 beforeEach(async () => {
   stateDir = isolateStateDir();
@@ -71,7 +55,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await client?.close();
   await bridge?.close();
-  globalThis.fetch = originalFetch;
   vi.useRealTimers();
   delete process.env.TYPESAFE_API_KEY;
   delete process.env.C2C_STATE_DIR;
@@ -81,12 +64,12 @@ afterEach(async () => {
 
 describe("Phase 2 receipt authorization and handoff proof", () => {
   it("compiles only a current, untampered Phase 2 proof for this workspace", async () => {
-    fakeEndpoint("proceed");
     const p = proposal("phase3-real-proof"), receiptId = await issue(p);
     const created = await brief(p, { receiptId });
     expect(created).toMatchObject({ state: "READY_FOR_EXECUTION", created: true });
     const approved = created.brief as Parameters<typeof readHandoffProof>[1];
     const compile = async (input: unknown) => body(await client.callTool({ name: "phase3_compile_execution", arguments: { brief: input } }));
+    expect(await compile({ ...approved, goal: "Unproved caller-created brief" })).toMatchObject({ status: "REJECTED_INSUFFICIENT_BRIEF" });
     expect(await compile(approved)).toMatchObject({ status: "READY", package: { prompt: expect.any(String) } });
     const changed = await compile({ ...approved, mustChange: ["Change a different boundary"] });
     expect(changed).toMatchObject({ status: "REJECTED_INSUFFICIENT_BRIEF" });
@@ -126,12 +109,11 @@ describe("Phase 2 receipt authorization and handoff proof", () => {
     expect(expired).not.toHaveProperty("package");
   });
   it("rejects a proven Brief after a Jev stop on its execution line", async () => {
-    fakeEndpoint("proceed");
     const p = proposal("phase3-stopped-proof"), receiptId = await issue(p);
     const created = await brief(p, { receiptId });
     expect(created).toMatchObject({ state: "READY_FOR_EXECUTION", created: true });
-    fakeEndpoint("stop");
-    await issue(p);
+    await issueJevReceipt(bridge.workspace.id, createExecutionProposal(p),
+      { task: p.goal, evidence: ["fresh observed integration"], attempts: [] }, { available: true, decision: "stop" });
     const result = body(await client.callTool({ name: "phase3_compile_execution", arguments: { brief: created.brief } }));
     expect(result).toMatchObject({ status: "REJECTED_INSUFFICIENT_BRIEF" });
     expect(result).not.toHaveProperty("package");
@@ -146,7 +128,6 @@ describe("Phase 2 receipt authorization and handoff proof", () => {
   });
 
   it("only the genuine proposal-bound receipt creates a brief and local proof", async () => {
-    fakeEndpoint("proceed");
     const p = proposal("auth-real-proceed"), receiptId = await issue(p);
     const authorized = { receiptId };
     expect((await transition(p, authorized)).state).toBe("READY_FOR_EXECUTION");
@@ -170,9 +151,10 @@ describe("Phase 2 receipt authorization and handoff proof", () => {
     ["reframe", "REFRAME_REQUIRED"],
     ["stop", "STOPPED"],
   ] as const)("does not create a brief after an actual %s", async (decision, state) => {
-    fakeEndpoint(decision);
     const p = proposal(`auth-${decision}`);
-    const authorized = { receiptId: await issue(p) };
+    const receiptId = (await issueJevReceipt(bridge.workspace.id, createExecutionProposal(p),
+      { task: p.goal, evidence: ["fresh observed integration"], attempts: [] }, { available: true, decision })).receiptId;
+    const authorized = { receiptId };
     expect((await transition(p, authorized)).state).toBe(state);
     expect(await brief(p, authorized)).toMatchObject({ state, created: false });
     if (decision === "stop") expect((await transition(p)).state).toBe("STOPPED");

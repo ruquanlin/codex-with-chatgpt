@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import fs from "node:fs";
 import { startBridge, type Bridge } from "../src/bridge/server.js";
 import { createExecutionProposal } from "../src/workflow/phase2.js";
-import { verifyJevReceipt, getJevStop } from "../src/workflow/phase2/jev-receipts.js";
+import { issueJevReceipt, getJevStop } from "../src/workflow/phase2/jev-receipts.js";
 import { cleanup, isolateStateDir, makeGitRepo, makeTmpDir } from "./helpers.js";
 
 const originalFetch = globalThis.fetch;
@@ -44,7 +45,7 @@ afterEach(async () => {
 });
 
 describe("bound Jev MCP receipts", () => {
-  it("issues a receipt only from an endpoint result, while legacy calls stay advisory", async () => {
+  it("returns Jev decisions as advice without issuing receipts or stop markers", async () => {
     await start();
     let upstreamCalls = 0;
     globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -60,15 +61,37 @@ describe("bound Jev MCP receipts", () => {
     expect(unbound).not.toHaveProperty("receiptId");
     const forgedIdentity = await client!.callTool({ name: "jev_decision_gate", arguments: { ...request, proposal: { ...proposal, identity: "a".repeat(64) } } });
     expect(forgedIdentity.isError).toBe(true);
-    const bound = body(await client!.callTool({ name: "jev_decision_gate", arguments: { ...request, proposal: createExecutionProposal(proposal) } }));
-    expect(bound).toMatchObject({ available: true, decision: "proceed" });
-    expect(typeof bound.receiptId).toBe("string");
-    expect(upstreamCalls).toBe(2);
-    const recorded = await verifyJevReceipt(bridge!.workspace.id, createExecutionProposal(proposal), bound.receiptId as string, request);
-    expect(recorded?.decision).toBe("proceed");
+    for (const decision of ["proceed", "reframe", "stop"] as const) {
+      globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+        if (String(url) === "https://api.typesafe.ai/v1/systemone") {
+          upstreamCalls++;
+          return new Response(JSON.stringify({ answers: { gate: { choice: decision } } }), { status: 200, headers: { "content-type": "application/json" } });
+        }
+        return originalFetch(url, init);
+      }) as typeof fetch;
+      const result = body(await client!.callTool({ name: "jev_decision_gate", arguments: { ...request, proposal: createExecutionProposal({ ...proposal, executionLineId: `advice-${decision}` }) } }));
+      expect(result).toMatchObject({ available: true, decision });
+      expect(result).not.toHaveProperty("receiptId");
+    }
+    const readToken = bridge!.authStore.issueTokens({ clientId: "read-only-advisor", scopes: ["workspace.read"] });
+    const readClient = new Client({ name: "read-only-advisor", version: "1.0.0" });
+    try {
+      await readClient.connect(new StreamableHTTPClientTransport(new URL(`${bridge!.localBaseUrl()}/mcp`), {
+        requestInit: { headers: { authorization: `Bearer ${readToken.accessToken}` } },
+      }));
+      const readOnlyResult = body(await readClient.callTool({ name: "jev_decision_gate", arguments: {
+        ...request, proposal: createExecutionProposal({ ...proposal, executionLineId: "read-only-advice" }),
+      } }));
+      expect(readOnlyResult).toMatchObject({ available: true, decision: "stop" });
+      expect(readOnlyResult).not.toHaveProperty("receiptId");
+    } finally { await readClient.close(); }
+    expect(upstreamCalls).toBe(5);
+    const receiptDirectory = `${stateDir}/jev-receipts/${bridge!.workspace.id}`;
+    const created = fs.existsSync(receiptDirectory) ? fs.readdirSync(receiptDirectory) : [];
+    expect(created.some((name) => /^(stop-|stop-investigation-|[a-f0-9]{48}\.json)/.test(name))).toBe(false);
   });
 
-  it("does not issue receipts on unavailable Jev and preserves a real stop", async () => {
+  it("keeps historical Stop enforcement while advisory Jev cannot create a new Stop", async () => {
     await start();
     let decision: "offline" | "stop" | "proceed" = "offline";
     let upstreamCalls = 0;
@@ -85,9 +108,11 @@ describe("bound Jev MCP receipts", () => {
     expect(unavailable).toMatchObject({ available: false });
     expect(unavailable).not.toHaveProperty("receiptId");
     decision = "stop";
-    const stop = body(await client!.callTool({ name: "jev_decision_gate", arguments: { ...request, proposal } }));
-    expect(stop).toMatchObject({ available: true, decision: "stop" });
-    expect((await getJevStop(bridge!.workspace.id, proposal.executionLineId))?.receiptId).toBe(stop.receiptId);
+    const result = body(await client!.callTool({ name: "jev_decision_gate", arguments: { ...request, proposal: { ...proposal, executionLineId: "advisory-stop" } } }));
+    expect(result).toMatchObject({ available: true, decision: "stop" });
+    expect(result).not.toHaveProperty("receiptId");
+    expect(await getJevStop(bridge!.workspace.id, "advisory-stop")).toBeNull();
+    await issueJevReceipt(bridge!.workspace.id, createExecutionProposal(proposal), request, { available: true, decision: "stop" });
     decision = "proceed";
     const afterStop = await client!.callTool({ name: "jev_decision_gate", arguments: { ...request, proposal } });
     expect(afterStop.isError).toBe(true);

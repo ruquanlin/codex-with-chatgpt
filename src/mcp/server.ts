@@ -16,7 +16,7 @@ import { PRODUCT_NAME, VERSION } from "../version.js";
 import { applyPatch } from "../workspace/applyPatch.js";
 import { readWorkflowPolicy } from "../policy/workflow-policy.js";
 import { runJevDecisionGate } from "../decision/jev-gate.js";
-import { getJevStop, issueJevReceipt } from "../workflow/phase2/jev-receipts.js";
+import { getJevStop } from "../workflow/phase2/jev-receipts.js";
 import { verifyPhase2Authorization } from "../workflow/phase2/authorization.js";
 import { issueHandoffProof, readHandoffProof } from "../workflow/phase2/handoff-proof.js";
 import { assessPreflight, issuePreflightReceipt, parsePreflightInput } from "../workflow/phase2/preflight-receipts.js";
@@ -264,7 +264,6 @@ const jevDecisionGateOutputSchema = {
   probabilities: z.record(z.number()).optional(),
   model: z.string().optional(),
   error: z.string().optional(),
-  receiptId: z.string().optional(),
 };
 
 const failureRecordOutputSchema = z.object({
@@ -427,7 +426,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     "phase2_preflight",
     {
       title: "Evaluate trusted conditional Phase 2 preflight",
-      description: "Evaluate bounded current task material, known Stops and mandatory Jev signals; issue a signed NOT_REQUIRED receipt only for eligible ordinary work. " + UNTRUSTED_NOTE,
+      description: "Apply deterministic task-material, known Stop, and failure checks; issue a signed v4 NOT_REQUIRED receipt only when the required evidence is complete. Jev labels do not determine execution authorization. " + UNTRUSTED_NOTE,
       inputSchema: { proposal: z.unknown(), preflight: z.unknown() },
       outputSchema: { state: z.string(), reasonCodes: z.array(z.string()), receiptId: z.string().optional() },
       annotations: { readOnlyHint: false },
@@ -481,8 +480,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
     {
       title: "Phase 2 proposal transition",
       description:
-        "Create an execution proposal identity and compute its Phase 2 Jev transition. " +
-        "Only a server-issued, proposal-bound Jev receipt reference can authorize readiness. " + UNTRUSTED_NOTE,
+        "Create an execution proposal identity and verify legacy Jev or current Preflight authorization. " +
+        "A Jev advisory is not authorization; valid historical Jev proceed receipts remain verifiable until expiry. " + UNTRUSTED_NOTE,
       inputSchema: { proposal: z.unknown(), boundJevResult: z.unknown().optional() },
       outputSchema: { state: z.string(), proposal: z.record(z.unknown()), jevResult: z.record(z.unknown()).optional() },
       annotations: { readOnlyHint: true },
@@ -508,7 +507,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
     {
       title: "Create Phase 2 Execution Brief",
       description:
-        "Verify the C2C-issued Jev receipt before creating a canonical, proof-backed brief. " +
+        "Verify a valid legacy Jev authorization or current deterministic Preflight receipt before creating a canonical, proof-backed brief. " +
         "Persisted briefs are written under docs/workflow/execution-briefs/. This does not route work or compile prompts. " + UNTRUSTED_NOTE,
       inputSchema: {
         proposal: z.unknown(),
@@ -622,9 +621,9 @@ export function createMcpServer(ctx: McpContext): McpServer {
     {
       title: "Jev decision gate",
       description:
-        "Ask Jev whether another Codex debugging/execution step should proceed, be reframed, or stop. " +
-        "Use this before Codex when an investigation risks becoming speculative or repetitive. " +
-        "This tool only judges the supplied state; it does not execute Codex or modify the workspace. " +
+        "Optionally ask Jev for an advisory opinion when the user explicitly requests it. " +
+        "The response is not execution authorization and cannot create a receipt or Stop Marker. " +
+        "Deterministic Preflight and existing authorization checks control execution readiness. " +
         UNTRUSTED_NOTE,
       inputSchema: {
         task: z.string().min(1).describe("The exact Codex task currently being considered"),
@@ -636,13 +635,13 @@ export function createMcpServer(ctx: McpContext): McpServer {
           approvedBasis: z.object({ type: z.enum(["root_cause", "approved_design", "explicit_instruction"]), summary: z.string() }),
           implementationBasis: z.array(z.string()), riskProfile: z.string().optional(), jevRequired: z.boolean(),
           identity: z.string().optional(),
-        }).strict().optional().describe("Complete Phase 2 proposal to bind a C2C-issued Jev receipt"),
+        }).strict().optional().describe("Optional proposal checked against existing historical Stop records"),
       },
       outputSchema: jevDecisionGateOutputSchema,
-      annotations: { readOnlyHint: false },
+      annotations: { readOnlyHint: true },
     },
     async (args, extra) => {
-      const denied = requireScope(extra.authInfo, args.proposal ? "workspace.write" : "workspace.read");
+      const denied = requireScope(extra.authInfo, "workspace.read");
       if (denied) return denied;
       let proposal;
       try {
@@ -668,13 +667,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
           error: error instanceof Error ? error.message : String(error),
         });
       }
-      if (!proposal || !result.available || !result.decision) return okStructured(result);
-      try {
-        const receipt = await issueJevReceipt(workspace.id, proposal, request, result);
-        return okStructured({ ...result, receiptId: receipt.receiptId });
-      } catch (error) {
-        return fail("JEV_RECEIPT_STORE_FAILED", error instanceof Error ? error.message : String(error));
-      }
+      return okStructured(result);
     }
   );
 

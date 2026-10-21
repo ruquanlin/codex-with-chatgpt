@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHmac } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { startBridge, type Bridge } from "../src/bridge/server.js";
+import { createExecutionProposal } from "../src/workflow/phase2.js";
 import { briefDigest } from "../src/workflow/phase2/handoff-proof.js";
+import { issueJevReceipt } from "../src/workflow/phase2/jev-receipts.js";
 import { cleanup, isolateStateDir, makeGitRepo, makeTmpDir } from "./helpers.js";
 
 let bridge: Bridge, client: Client, root: string, stateDir: string;
@@ -70,12 +73,110 @@ describe("trusted conditional preflight over MCP", () => {
     expect((await transition(p, bound)).state).toBe("READY_FOR_EXECUTION");
   });
 
-  it("keeps mandatory signals and missing details out of NOT_REQUIRED", async () => {
-    expect((await preflightCall({ ...proposal("mandatory-flag"), jevRequired: true })).state).toBe("REQUIRES_JEV");
-    expect((await preflightCall({ ...proposal("unclear-bug"), goal: "Investigate an unclear difficult bug" })).state).toBe("REQUIRES_JEV");
-    expect((await preflightCall({ ...proposal("incident"), riskProfile: "Production runtime incident" })).state).toBe("REQUIRES_JEV");
-    expect((await preflightCall(proposal("followup"), { ...preflight, completedPriorDiagnosisAndFollowupCodex: true })).state).toBe("REQUIRES_JEV");
-    expect((await preflightCall(proposal("repeated"), { ...preflight, repetitiveInvestigationWithoutProgress: true })).state).toBe("REQUIRES_JEV");
+  it("does not require Jev for labels when bounded task materials are complete", async () => {
+    for (const p of [
+      { ...proposal("mandatory-flag"), jevRequired: true },
+      { ...proposal("unclear-bug"), goal: "Investigate an unclear difficult bug" },
+      proposal("followup"), proposal("repeated"),
+    ]) {
+      expect((await preflightCall(p, { ...preflight, completedPriorDiagnosisAndFollowupCodex: true,
+        repetitiveInvestigationWithoutProgress: true })).state).toBe("NOT_REQUIRED");
+    }
+  });
+
+  it("requires concrete materials for vague evidence, criteria, and high-risk work", async () => {
+    expect(await preflightCall(proposal("vague-evidence"), { ...preflight, taskEvidence: ["已批准"] }))
+      .toMatchObject({ state: "NEEDS_TASK_DETAILS" });
+    expect(await preflightCall(proposal("vague-criteria"), { ...preflight, acceptanceCriteria: ["done"] }))
+      .toMatchObject({ state: "NEEDS_TASK_DETAILS" });
+    expect(await preflightCall({ ...proposal("incident"), riskProfile: "Production runtime incident" }))
+      .toMatchObject({ state: "NEEDS_TASK_DETAILS" });
+    const completeRisk = { ...proposal("bounded-incident"), riskProfile: "Production incident; permitted action is read-only diagnosis; stop if customer data changes; verify with read-only health checks" };
+    const riskEvidence = { taskEvidence: ["Investigate elevated error rate using service logs; stop before any writes"],
+      acceptanceCriteria: ["Confirm the affected endpoint and compare error rate before and after the incident window"] };
+    expect(await preflightCall(completeRisk, riskEvidence)).toMatchObject({ state: "NOT_REQUIRED", receiptId: expect.any(String) });
+  });
+
+  it("allows a bounded read-only diagnosis when the root cause is unknown", async () => {
+    const diagnostic = { ...proposal("unknown-root-cause"), goal: "Investigate intermittent export endpoint 500 errors; root cause unknown",
+      scope: { inScope: ["Read export service logs and request traces"], outOfScope: ["Do not modify code, data, or production configuration"] },
+      riskProfile: "Read-only investigation; stop if evidence requires writes" };
+    const evidence = { taskEvidence: ["Compare failing request traces with healthy requests; stop after identifying the failing boundary"],
+      acceptanceCriteria: ["Identify the failing boundary from logs or report that evidence is insufficient"] };
+    expect(await preflightCall(diagnostic, evidence)).toMatchObject({ state: "NOT_REQUIRED", receiptId: expect.any(String) });
+  });
+
+  it("treats an explicit prohibition on bypassing authentication as a safe boundary", async () => {
+    const secureReview = { ...proposal("auth-review"), goal: "Review the existing authentication response behavior",
+      scope: { inScope: ["Read authentication handler and its tests"], outOfScope: ["Do not bypass authentication or modify token validation"] },
+      implementationBasis: ["Preserve existing authentication checks"],
+      riskProfile: "Security review; permitted actions are read-only source and test inspection; stop before edits; verify expected authentication behavior" };
+    const evidence = { taskEvidence: ["Inspect the authentication handler and its unit tests"],
+      acceptanceCriteria: ["Confirm missing tokens are rejected by the handler"] };
+    expect(await preflightCall(secureReview, evidence)).toMatchObject({ state: "NOT_REQUIRED", receiptId: expect.any(String) });
+  });
+
+  it("uses declared incident signals and scoped read-only actions as risk evidence", async () => {
+    expect(await preflightCall(proposal("incident-flag"), { ...preflight, productionOrRuntimeIncident: true }))
+      .toMatchObject({ state: "NEEDS_TASK_DETAILS" });
+    const diagnostic = { ...proposal("production-read-only"),
+      goal: "Investigate production export errors with root cause unknown",
+      scope: { inScope: ["Read-only inspection of export service logs and request traces"],
+        outOfScope: ["Do not modify production code, data, or configuration"] },
+      riskProfile: "Production incident; stop if inspection would require writes" };
+    const evidence = { taskEvidence: ["Compare request traces with healthy requests; stop after identifying the failing boundary"],
+      acceptanceCriteria: ["Verify the failing endpoint from request traces or report insufficient evidence"] };
+    expect(await preflightCall(diagnostic, { ...evidence, productionOrRuntimeIncident: true }))
+      .toMatchObject({ state: "NOT_REQUIRED", receiptId: expect.any(String) });
+  });
+
+  it("does not approve an unknown-cause repair because an unrelated change is prohibited", async () => {
+    const contradictory = { ...proposal("unknown-cause-contradiction"),
+      goal: "Investigate the export endpoint; root cause unknown",
+      scope: { inScope: ["Modify retry logic in the handler"], outOfScope: ["Do not modify the unrelated compiler"] },
+      riskProfile: "Read-only investigation; stop if evidence requires writes" };
+    const evidence = { taskEvidence: ["Read request traces and stop after identifying the failing boundary"],
+      acceptanceCriteria: ["Identify the failing boundary from request traces or report insufficient evidence"] };
+    expect(await preflightCall(contradictory, evidence)).toMatchObject({ state: "NEEDS_TASK_DETAILS" });
+  });
+
+  it("issues v4 receipts and rejects a correctly signed legacy v3 receipt", async () => {
+    const p = proposal("receipt-version");
+    const issued = await preflightCall(p);
+    expect(issued).toMatchObject({ state: "NOT_REQUIRED", receiptId: expect.any(String) });
+    const bound = { preflightReceiptId: issued.receiptId, preflight };
+    const made = await brief(p, bound);
+    expect(made).toMatchObject({ created: true });
+    const receiptFile = path.join(stateDir, "preflight-receipts", bridge.workspace.id, `${issued.receiptId}.json`);
+    const envelope = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+    expect(envelope.record.version).toBe(4);
+    envelope.record.version = 3;
+    envelope.mac = createHmac("sha256", fs.readFileSync(path.join(stateDir, "preflight-receipts", bridge.workspace.id, "issuer.key")))
+      .update(JSON.stringify(envelope.record)).digest("hex");
+    fs.writeFileSync(receiptFile, JSON.stringify(envelope));
+    expect((await transition(p, { preflightReceiptId: issued.receiptId, preflight })).state).not.toBe("READY_FOR_EXECUTION");
+    expect(await brief(p, { preflightReceiptId: issued.receiptId, preflight })).toMatchObject({ created: false });
+    expect(await call("phase3_compile_execution", { brief: made.brief }))
+      .toMatchObject({ status: "REJECTED_INSUFFICIENT_BRIEF" });
+  });
+
+  it("reports an immutable handoff proof digest conflict without replacing the proof", async () => {
+    const p = proposal("proof-conflict"), issued = await preflightCall(p);
+    const bound = { preflightReceiptId: issued.receiptId, preflight };
+    const made = await brief(p, bound);
+    expect(made).toMatchObject({ state: "READY_FOR_EXECUTION", created: true });
+    const proofFile = path.join(stateDir, "handoff-proofs", bridge.workspace.id,
+      `${briefDigest(made.brief as Parameters<typeof briefDigest>[0])}.json`);
+    const original = fs.readFileSync(proofFile, "utf8");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(Date.now() + 900_001));
+    const second = await preflightCall(p);
+    const conflict = await brief(p, { preflightReceiptId: second.receiptId, preflight });
+    expect(conflict).toMatchObject({ error: "PHASE2_EXECUTION_BRIEF_FAILED", message: "Conflicting handoff proof" });
+    expect(fs.readFileSync(proofFile, "utf8")).toBe(original);
+  });
+
+  it("keeps missing baseline details out of NOT_REQUIRED", async () => {
     expect((await preflightCall(proposal("missing"), { taskEvidence: preflight.taskEvidence, acceptanceCriteria: [] })).state).toBe("NEEDS_TASK_DETAILS");
     expect((await preflightCall({ ...proposal("missing-goal"), goal: "" })).state).toBe("NEEDS_TASK_DETAILS");
   });
@@ -134,7 +235,9 @@ describe("trusted conditional preflight over MCP", () => {
     }) as typeof fetch;
     const stopped = { ...proposal("known-stop"), jevRequired: true };
     expect(await call("jev_decision_gate", { task: stopped.goal, evidence: ["known investigation"], attempts: [], proposal: stopped }))
-      .toMatchObject({ decision: "stop", receiptId: expect.any(String) });
+      .toMatchObject({ decision: "stop" });
+    await issueJevReceipt(bridge.workspace.id, createExecutionProposal(stopped),
+      { task: stopped.goal, evidence: ["known investigation"], attempts: [] }, { available: true, decision: "stop" });
     const renamed = { ...proposal("renamed-stop"), jevRequired: false };
     expect((await preflightCall(renamed)).state).toBe("STOPPED");
     const independent = { ...proposal("independent-task"), goal: "Add a bounded JSON export option",
