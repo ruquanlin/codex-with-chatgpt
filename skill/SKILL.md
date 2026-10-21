@@ -219,11 +219,21 @@ Duplicate finalization remains idempotent.
 
 ### Optional Jev Advisory
 
+#### v4 Ordinary Execution
+
 Jev may be consulted only when the user explicitly requests it. Difficult or
 unclear bugs, production incidents, follow-up work, and repeated investigation
-do not by themselves require a Jev call. Use deterministic Preflight and the
-existing workspace, identity, historical Stop, failure, authorization, and
-Handoff Proof checks for execution readiness.
+do not by themselves require a Jev call.
+
+For v4 ordinary execution, do not use historical Jev Stop results as an
+execution gate. `STOPPED`, `UNVERIFIED`, and Stop lookup failures must not
+independently block the task. Do not route ordinary v4 work through
+`jev_stop_status` or v3 Phase 2/3 gates. Keep historical records unchanged for
+audit; legacy v3 APIs retain their existing Stop behavior for compatibility.
+
+Continue to verify connected workspace identity and permissions, explicit
+user authorization, independent safety restrictions, and applicable
+non-Stop checks. A historical Stop does not replace those safeguards.
 
 Jev's `proceed`, `reframe`, and `stop` results are advisory. They do not
 authorize execution or create a permanent veto, Jev Receipt, or Stop Marker.
@@ -231,12 +241,12 @@ The production Jev advisory path does not automatically issue a Receipt or
 create a Stop Marker. Jev unavailability alone does not block a task that passes
 the applicable deterministic checks.
 
-Existing historical Stop Markers and Failure records continue to apply under
-their original checks. Valid historical Jev Receipts and Handoff Proof remain
-subject to their existing identity, signature, scope, and expiry verification.
-Preflight is not proof that the user approved an external or high-impact action;
-deployment, deletion, production changes, and other external side effects still
-require the applicable user authorization.
+Legacy v3 APIs continue to apply historical Stop Markers and Failure records
+under their original checks. Valid historical Jev Receipts and Handoff Proof
+remain subject to their existing identity, signature, scope, and expiry
+verification. Preflight is not proof that the user approved an external or
+high-impact action; deployment, deletion, production changes, and other
+external side effects still require the applicable user authorization.
 
 
    ### Usage-efficiency rules

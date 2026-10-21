@@ -21,11 +21,19 @@ The default workflow is:
 
 ### Optional Jev advice
 
+#### v4 ordinary execution
+
 Consult `jev_decision_gate` only when the user explicitly asks for Jev advice.
 Debugging difficulty, production context, follow-up work, and repeated checks
-do not automatically require Jev. Use deterministic Preflight and existing
-authorization, historical Stop, failure, and Handoff Proof checks to decide
-whether execution is ready.
+do not automatically require Jev.
+
+For v4 ordinary execution, do not call `jev_stop_status` or a v3 Phase 2/3 gate
+to decide whether work may proceed. Historical Stop results (`STOPPED`,
+`UNVERIFIED`, or a failed lookup) must not independently block this path. Keep
+the historical records unchanged. Legacy v3 APIs continue using their original
+checks for compatibility.
+
+Continue to verify connected workspace identity and permissions, explicit user authorization for the requested action, independent safety restrictions, and applicable non-Stop checks. A Jev Stop marker does not grant or revoke those independently required authorizations.
 
 Jev output is advisory only:
 
@@ -33,7 +41,8 @@ Jev output is advisory only:
   Receipt or Stop Marker;
 - Jev being unavailable does not independently block an otherwise authorized
   task;
-- historical Stop Markers continue to block affected execution lines;
+- historical Stop Markers remain available for audit and legacy v3 checks, but
+  do not independently block v4 ordinary execution;
 - deployment, deletion, production changes, and other external side effects
   still require the applicable user approval.
 

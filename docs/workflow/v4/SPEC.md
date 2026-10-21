@@ -1,7 +1,7 @@
 # Workflow v4 — Minimal Spec
 
 **日期：** 2026-10-21
-**状态：** v4 极简设计稿（已完成文档自审；尚未实施或切换）
+**状态：** v4 策略变更已获批准并写入仓库策略；更高优先级全局工作流是否同步切换尚未核实
 **工作区：** `codex-with-chatgpt`（已核对 `main` @ `dc88d8d`）
 
 ## 目标
@@ -54,16 +54,15 @@ ChatGPT 创建或修订交付给用户的 Spec、Plan、报告、Markdown 文档
 ## 不可删除的安全底线
 
 - 连接的 C2C 工作区及权限必须正确；用户批准本次执行不等于批准任意直接写入、生产变更或外部操作。
-- **历史 Stop 不得静默绕过**。实际交接前复用 `getJevStop` 的现有语义检查相关 Stop；当前没有独立公开的只读查询入口，实施阶段最多补一个最小只读查询。无法核实或仍命中有效 Stop 时不交付执行。现有匹配基于执行线及材料指纹，不承诺识别任意语义改写。
+- **历史 Stop 不得作为 v4 普通任务的独立门禁**。`STOPPED`、`UNVERIFIED` 或 Stop 查询失败都不能单独拒绝 v4 普通执行；普通路径不调用 `jev_stop_status` 或 v3 Phase 2/3 门禁。历史记录保持不变供审计，旧 v3 API 仍按原行为执行 Stop 检查。若独立安全限制、用户授权或其他非 Stop 检查拒绝任务，仍必须遵守。
+- For v4 ordinary execution, historical Stop results (`STOPPED`, `UNVERIFIED`) or a Stop query failure must not independently block the task. Continue to require workspace identity and permissions, explicit user authorization, and independent safety restrictions.
 - Jev 默认不调用；仅在用户明确要求时咨询，且 Jev 意见不等于执行授权。
-- 如果 v4 尚不能在真实执行边界检查既有 Stop，**不得提前取消当前有效的 v3 交接门禁**。这个技术依赖仅用最小只读接口解决，不扩展成新架构。
+- 已有 Stop 标记不替代工作区身份、连接器权限、明确用户授权或独立安全限制；这些要求仍在各自授权边界执行。
 
-## 历史 Stop 迁移（一次性，不增加日常门禁）
+## 历史 Stop 保留
 
-- **安全性 Stop**：涉及真实安全风险或用户明确禁止的操作，继续阻止相关执行。
-- **程序性 Stop**：因 v3 流程设计、重复审批或交接故障产生的阻塞，只有在核实证据、确认不涉及安全限制，并通过正式授权的解除机制后，才不再阻止该任务；保留原记录供审计。
-- 现有 Stop 记录**无法可靠自动区分**这两类：不得依据文案猜测类型、删除记录、改任务 ID 或直接忽略标记。若无可用的可信解除机制，报告阻塞并停止，不为求推进而旁路。
-- 切换时仅核查**已知受影响的旧执行线**，不对所有历史记录开展全量治理，也不建立新的 Stop Review / Recovery 工作流。独立的新任务不因无关历史 Stop 而受阻。
+- 不修改、删除、迁移或重新分类历史 Stop；保留现有记录用于审计和旧 v3 API 兼容。
+- v4 普通执行不依据历史 Stop 状态单独阻断；不得将 Stop 标记解释为安全规则、用户授权或其他独立约束的替代物。
 
 ## 失败处理
 
@@ -71,15 +70,15 @@ ChatGPT 创建或修订交付给用户的 Spec、Plan、报告、Markdown 文档
 
 ## 最小落地范围
 
-- **流程规则**：经批准更新上层正式执行交接规则，使普通任务不再强制 Phase 2 → Phase 3；保留智能 Skill Routing、窗口管理、精简 Prompt 和定向验证；默认 Luna / Light。**切换前仍遵守现行 Phase 2/3 要求，不靠改文档绕过。**
-- **C2C**：仅补必要的只读 Stop 查询并复用现有执行记录；不改 OAuth、Bridge 身份体系或既有 Stop 数据，不重写 Phase 2/3/4。C2C-managed Codex 执行仍须按已有契约落盘记录。
-- **迁移**：先在 `codex-with-chatgpt` 对已知受影响的历史 Stop 作一次性核实，并在有可信解除途径时处理程序性 Stop；随后验证并切换。Portfolio、Pendlio、Investment 保持现状，确认稳定后再逐项目采用。
+- **流程规则**：普通 v4 任务不经过 Phase 2/3 或历史 Stop 门禁；保留智能 Skill Routing、窗口管理、精简 Prompt 和定向验证；默认 Luna / Light。仓库策略文档不代表已修改更高优先级的全局工作流配置。
+- **C2C**：保留只读 Stop 查询和现有执行记录；不改 OAuth、Bridge 身份体系、既有 Stop 数据或旧 v3 API。C2C-managed Codex 执行仍须按已有契约落盘记录。
+- **采用范围**：此策略仅适用于本工作区 v4 普通执行。Portfolio、Pendlio、Investment 保持现状。
 - **文件保护**：保留所有未提交、未追踪与历史文档，不做清理或重排。
 
 ## 验收
 
 1. 普通已批准任务：**不调用四个 v3 Phase 2/3 工具**，输出一条精简 Codex Prompt，完成定向验证和用户验收。
-2. 旧 Stop：安全性 Stop 继续阻止；已核实的程序性 Stop 仅经正式授权解除后才可继续。未分类、查询失败或不匹配工作区的情况不能静默放行，改名或换执行线不得绕过。
+2. 历史 Stop：旧 Stop 单独不能阻断 v4 普通任务；独立的安全限制、授权和工作区权限仍可阻断。历史记录不变，旧 v3 API 的兼容行为不变。
 3. 用户未授权写入/部署：不执行相应操作。
 4. 同样错误没有新事实：停止循环，报告阻塞。
 5. Skill Routing 按任务自动选择相关 Skill，Impeccable 的建议不扩大范围；默认目标为 Luna / Light（能力支持时），仅在任务确实需要时升级，并在交付 Prompt 时明确推荐具体可用模型、推理档位和简短理由；不虚报实际执行所用模型。

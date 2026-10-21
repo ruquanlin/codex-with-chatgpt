@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` when actually implementing. Preserve the current authorized C2C → Codex handoff and execution-record contract; this plan does not waive either.
 
-**Goal:** Make the approved v4 three-step workflow usable without the v3 Phase 2/3 chain, while preserving existing workspace authorization, historical Stop checks, and C2C execution records.
+**Goal:** Make the approved v4 three-step workflow usable without v3 Phase 2/3 or mandatory historical Stop checks, while preserving workspace authorization, independent safety restrictions, and C2C execution records.
 
-**Architecture:** Add only the missing *read-only* historical Stop query to C2C. Do not build another orchestrator, receipt, lifecycle system, or replacement compiler. The default-path change is an **upstream workflow-rule change**, not something a repository patch can authorize.
+**Architecture:** Retain the existing *read-only* historical Stop query for audit and compatibility. Ordinary v4 execution does not use historical Stop status as a gate. Do not build another orchestrator, receipt, lifecycle system, or replacement compiler. The active global workflow may still be higher priority than repository policy and must be checked separately.
 
 **Tech Stack:** TypeScript, MCP SDK, Zod, Vitest; current workspace `codex-with-chatgpt`, `main` @ `dc88d8d` (read-only baseline, not a branch lock).
 
@@ -16,7 +16,7 @@
 - Do not alter v3 Phase 2/3 implementations or remove legacy MCP tools during the first release.
 - Keep Skill Routing, conditional Impeccable, automatic window recommendations, document self-review, and **Luna Light as the default target** in the governing ChatGPT workflow instructions—not a new C2C runtime subsystem.
 - Jev is advisory and invoked only when the user asks. Model upgrades require a task-specific reason, a named available model, and a reasoning level.
-- No automatic historical Stop clearance. A relevant Stop with no trusted clearance path stays blocked; do not rename tasks to evade it.
+- Historical Stop records remain unchanged. Stop status alone does not block v4 ordinary execution; applicable independent safety restrictions and authorization checks remain in force.
 - No deployment, broad refactor, full test suite, or edits to Portfolio, Pendlio, or Investment as part of this plan.
 
 ## Task 1 — Minimal read-only historical Stop query (Codex)
@@ -44,25 +44,25 @@
 ## Task 2 — Switch the *authoritative* default workflow (configuration, not a Codex patch)
 
 - [ ] Confirm the responsible upper-level workflow instruction can actually be updated. A repository Markdown or `docs/codex-execution-policy.md` edit **does not** supersede an active higher-priority Phase 2/3 handoff requirement.
-- [ ] Once authorized through that instruction's owning mechanism, change only the default routing: `ChatGPT task + targeted skills → Codex execution + focused validation → user acceptance`; ordinary tasks no longer require `phase2_preflight`, `phase2_transition`, `phase2_execution_brief`, or `phase3_compile_execution`.
-- [ ] Preserve C2C workspace identity/permissions, task-specific user authorization, `jev_stop_status` before delegated execution, relevant current Stop blocks, and persisted execution records. Skill Routing remains automatic; window handoff is suggested only when needed; documents must pass ChatGPT self-review before delivery.
-- [ ] Check only **known affected historical Stop lines** once. Keep any unclassified Stop blocked; do not invent a clearance path or initiate a full migration. This does not block unrelated clean tasks.
+- [ ] Set v4 ordinary routing to `ChatGPT task + targeted skills → Codex execution + focused validation → user acceptance`; ordinary tasks do not require the v3 Phase 2/3 tools or historical Stop lookup.
+- [ ] Preserve C2C workspace identity/permissions, task-specific user authorization, independent safety restrictions, and persisted execution records. Skill Routing remains automatic; window handoff is suggested only when needed; documents must pass ChatGPT self-review before delivery.
+- [ ] Identify any higher-priority workflow configuration that still requires the legacy gate. Repository policy edits do not claim that external configuration changed.
 - [ ] Until this change is actually effective, use the current Phase 2/3 protocol. **Do not claim v4 is active because Task 1 passed.**
 
 **Acceptance:** The current authoritative instruction—not a lower-priority repository file—permits the simpler ordinary path. If not, stop and report the owner/configuration blocker once; don't generate another governance design.
 
 ## Task 3 — Focused cutover acceptance (only after Tasks 1–2)
 
-- [ ] Run **one real bounded, authorized, low-risk task** in `codex-with-chatgpt`: verify correct workspace, read-only Stop status, one concise Markdown Codex prompt, default Luna/Light if actually available, targeted Codex validation, persisted execution record, and user acceptance.
+- [ ] Run **one real bounded, authorized, low-risk task** in `codex-with-chatgpt`: verify correct workspace, one concise Markdown Codex prompt, default Luna/Light if actually available, targeted Codex validation, persisted execution record, and user acceptance.
 - [ ] Confirm the ordinary path made **zero** calls to the four removed v3 Phase 2/3 tools; do not state an unavailable model/thinking setting was used.
-- [ ] Run one **negative** Stop case to verify it refuses execution; don't clear the historical marker or create a fake approval.
+- [ ] Verify legacy v3 Stop behavior remains unchanged, while v4 ordinary execution is not denied solely because of a historical Stop; don't clear the historical marker or create a fake approval.
 - [ ] If a prerequisite fails, record its exact cause and end this attempt. Retry only with changed evidence. Do not expand the scope or launch a cross-project rollout.
 
-**Acceptance:** One genuine ordinary path works; the Stop case remains blocked; no unapproved write/deploy, no v3-chain calls, and no replay loop. Only then declare v4 default active and consider later project-by-project adoption.
+**Acceptance:** One genuine ordinary path works without a mandatory historical Stop lookup or denial based solely on historical Stop; legacy v3 Stop behavior remains unchanged. No unapproved write/deploy, no v3-chain calls, and no replay loop. Only then declare v4 default active and consider later project-by-project adoption.
 
 ## Review Focus (focused, not additional phases)
 
-1. Same investigation with only execution-line ID changed still hits historical Stop → Task 1 test.
+1. Historical STOPPED or UNVERIFIED status alone does not deny v4 ordinary execution; independent authorization and safety restrictions still apply.
 2. Malformed, tampered, or conflicting marker never becomes a false `CLEAR` → Task 1 test.
 3. Read-only client can query; unauthorized client cannot → Task 1 test.
 4. Existing active Phase 2/3 authority cannot be bypassed by editing a repository file → Task 2 acceptance.

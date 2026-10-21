@@ -136,4 +136,25 @@ describe("C2C workflow artifact execution-reporting contract", () => {
       expect(template).toContain("keep connector work read-only");
     }
   });
+
+  it("keeps historical Jev Stops out of v4 ordinary gating without weakening independent safeguards", () => {
+    const policy = readArtifact("docs/codex-execution-policy.md");
+    const debugging = readArtifact("docs/efficient-debugging-workflow.md");
+    const skill = readArtifact("skill/SKILL.md");
+    const v4 = readArtifact("docs/workflow/v4/SPEC.md");
+
+    for (const artifact of [policy, debugging, skill, v4]) {
+      const normalized = artifact.replace(/\s+/g, " ");
+      expect(normalized).toContain("v4 ordinary execution");
+      expect(normalized).toContain("historical Stop");
+      expect(normalized).toContain("must not independently block");
+      expect(normalized).toContain("explicit user authorization");
+      expect(normalized).toContain("workspace identity");
+      expect(normalized).toContain("independent safety restrictions");
+    }
+    expect(policy.replace(/\s+/g, " ")).toContain("Legacy v3 APIs retain their existing Stop enforcement for compatibility");
+    expect(debugging.replace(/\s+/g, " ")).toContain("For v4 ordinary execution, do not call `jev_stop_status` or a v3 Phase 2/3 gate");
+    expect(skill.replace(/\s+/g, " ")).toContain("For v4 ordinary execution, do not use historical Jev Stop results as an execution gate");
+    expect(v4.replace(/\s+/g, " ")).toContain("historical Stop results (`STOPPED`, `UNVERIFIED`) or a Stop query failure must not independently block the task");
+  });
 });

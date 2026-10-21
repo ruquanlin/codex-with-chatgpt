@@ -49,21 +49,32 @@ remains idempotent, and persisted metadata remains readable through
 
 ## 2A. Optional Jev Advisory
 
+### v4 ordinary execution
+
 Jev may be consulted only when the user explicitly requests it. Difficult or
 unclear bugs, production incidents, follow-up work, and repeated investigation
-do not by themselves require a Jev call. Use deterministic Preflight and the
-existing workspace, identity, historical Stop, failure, authorization, and
-handoff-proof checks for execution readiness.
+do not by themselves require a Jev call.
+
+For v4 ordinary execution, historical Jev Stop results (`STOPPED`, `UNVERIFIED`,
+or a failed/unavailable lookup) must not independently block the task. Do not
+require `jev_stop_status` or the v3 Phase 2/3 gates as a prerequisite for that
+path. Historical records remain unchanged for audit. Legacy v3 APIs retain their
+existing Stop enforcement for compatibility.
+
+This does not relax connected workspace identity, connector permissions,
+explicit user authorization for direct workspace mutation or external actions,
+independent safety restrictions, or other applicable non-Stop checks. A Stop
+record itself is not a substitute for those checks.
 
 The `jev_decision_gate` response is advisory. `proceed`, `reframe`, and `stop`
 are not execution authorization, do not issue a Jev Receipt, and cannot create
 a new Stop Marker. Jev unavailability alone does not block a task that passes
 the applicable deterministic checks.
 
-Existing historical Stop Markers continue to block their affected execution
-lines under the original checks. Preflight is not proof that the user approved
-an external or high-impact action; deployment, deletion, production changes,
-and other external side effects still require the applicable user approval.
+For legacy v3 calls, existing historical Stop Markers continue to be enforced
+under their original checks. Preflight is not proof that the user approved an
+external or high-impact action; deployment, deletion, production changes, and
+other external side effects still require the applicable user approval.
 
 ---
 
