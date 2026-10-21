@@ -58,6 +58,12 @@ It does not:
 - implement the Failure Loop;
 - parse completion reports.
 
+## 2.1 Conversation Window Management
+
+Default: **No-Trigger**. Do not advise on a new conversation window for routine work. At most once per substantive development phase transition, advise whether a new window is needed, whether to use the ChatGPT Project / C2C workspace, and whether a handoff prompt is needed. The default recommendation is to stay in the current window.
+
+A substantive transition is a real lifecycle change, an independent task, or an execution-boundary change. Routine tests, reviews, reconnects, and Git activity do not qualify. Recommend a new window only when context continuity is unreliable, isolation is necessary, or the session/connectivity cannot be recovered. A window change never resets workflow gates or authorization state.
+
 ---
 
 ## 3. Routing Priority
