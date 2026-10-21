@@ -217,27 +217,26 @@ semantics: do not send `STATE: EXECUTED`, and do not mark
 `EXECUTED_LOCAL` / `EXECUTED_SENT`, unless the matching record exists.
 Duplicate finalization remains idempotent.
 
-### Mandatory Jev decision gate
+### Optional Jev Advisory
 
-Jev is the strict pre-Codex referee for debugging work that risks becoming
-speculative or repetitive. Do not use it for ordinary well-scoped deterministic
-tasks.
+Jev may be consulted only when the user explicitly requests it. Difficult or
+unclear bugs, production incidents, follow-up work, and repeated investigation
+do not by themselves require a Jev call. Use deterministic Preflight and the
+existing workspace, identity, historical Stop, failure, authorization, and
+Handoff Proof checks for execution readiness.
 
-Before ChatGPT creates or sends another Codex task, it MUST call
-`jev_decision_gate` if any of these conditions applies:
-* the issue is a difficult or unclear bug;
-* the issue is a production/runtime incident;
-* at least one diagnosis/investigation round has completed and another Codex
-  diagnosis, repair, or follow-up round is being considered;
-* similar checks are being repeated without materially reducing uncertainty.
+Jev's `proceed`, `reframe`, and `stop` results are advisory. They do not
+authorize execution or create a permanent veto, Jev Receipt, or Stop Marker.
+The production Jev advisory path does not automatically issue a Receipt or
+create a Stop Marker. Jev unavailability alone does not block a task that passes
+the applicable deterministic checks.
 
-The gate result is binding:
-* `proceed` — Codex may continue with the proposed task;
-* `reframe` — do not send the current task; narrow/change it and run Jev again;
-* `stop` — stop creating Codex tasks for the current line of investigation;
-* `available: false` — do not silently bypass Jev. Report the unavailable gate
-  and stop automatic continuation. Only an explicit user instruction may bypass
-  the gate.
+Existing historical Stop Markers and Failure records continue to apply under
+their original checks. Valid historical Jev Receipts and Handoff Proof remain
+subject to their existing identity, signature, scope, and expiry verification.
+Preflight is not proof that the user approved an external or high-impact action;
+deployment, deletion, production changes, and other external side effects still
+require the applicable user authorization.
 
 
    ### Usage-efficiency rules

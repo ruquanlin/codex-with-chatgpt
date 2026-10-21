@@ -70,18 +70,21 @@ describe("C2C workflow artifact execution-reporting contract", () => {
     }
   });
 
-  it("keeps the mandatory Jev decision gate in policy, debugging workflow, and Skill", () => {
+  it("keeps Jev optional and advisory in policy, debugging workflow, and Skill", () => {
     const policy = readArtifact("docs/codex-execution-policy.md");
     const debugging = readArtifact("docs/efficient-debugging-workflow.md");
     const skill = readArtifact("skill/SKILL.md");
 
-    expect(policy).toContain("## 2A. Mandatory Jev Decision Gate");
-    expect(policy).toContain("do not silently bypass the gate");
-    expect(debugging).toContain("### Mandatory Jev gate before repeated/production debugging");
-    expect(debugging).toContain("Ordinary well-scoped deterministic tasks do not require Jev.");
-    expect(skill).toContain("### Mandatory Jev decision gate");
-    expect(skill).toContain("The gate result is binding:");
-    expect(skill).toContain("Only an explicit user instruction may bypass");
+    expect(policy).toContain("## 2A. Optional Jev Advisory");
+    expect(policy).toContain("only when the user explicitly requests consultation");
+    expect(policy).toContain("cannot create\na new Stop Marker");
+    expect(debugging).toContain("### Optional Jev advice");
+    expect(debugging).toContain("Consult `jev_decision_gate` only when the user explicitly asks for Jev advice.");
+    expect(skill).toContain("### Optional Jev Advisory");
+    expect(skill).toContain("Jev may be consulted only when the user explicitly requests it.");
+    expect(skill).toContain("They do not\nauthorize execution");
+    expect(skill).toContain("Jev Receipt, or Stop Marker");
+    expect(skill).not.toContain("### Mandatory Jev decision gate");
   });
 
   it("keeps generic workflow authority global and C2C policy additive", () => {

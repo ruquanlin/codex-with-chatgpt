@@ -6,7 +6,7 @@ import type { ExecutionProposal } from "../phase2.js";
 import { getJevStop } from "./jev-receipts.js";
 
 const ISSUER = "c2c-conditional-preflight";
-const VERSION = 3;
+const VERSION = 4;
 const MAX_AGE_MS = 900_000;
 const hex48 = /^[a-f0-9]{48}$/;
 const hex64 = /^[a-f0-9]{64}$/;
@@ -22,7 +22,7 @@ export interface PreflightInput {
   repetitiveInvestigationWithoutProgress?: boolean;
 }
 export interface PreflightReceipt {
-  version: 3; issuer: typeof ISSUER; receiptId: string; workspaceId: string;
+  version: 4; issuer: typeof ISSUER; receiptId: string; workspaceId: string;
   executionLineId: string; proposalIdentity: string; materialDigest: string;
   decision: "NOT_REQUIRED"; reasonCodes: string[]; issuedAt: string; expiresAt: string;
 }
@@ -64,25 +64,71 @@ export function preflightMaterialDigest(proposal: ExecutionProposal, input: Pref
   };
   return createHash("sha256").update(JSON.stringify(canonical(material))).digest("hex");
 }
-export function assessPreflight(proposal: ExecutionProposal, input: PreflightInput): { state: PreflightState; reasonCodes: string[] } {
-  const material = [proposal.goal, proposal.riskProfile ?? "", proposal.approvedBasis.summary,
-    ...proposal.scope.inScope, ...proposal.implementationBasis, ...input.taskEvidence].join(" ");
-  const mandatory = signals.filter((signal) => input[signal] === true);
-  if (proposal.jevRequired === true) mandatory.push("jevRequired" as PreflightSignal);
-  if (/\b(unclear|unknown cause|difficult bug|hard bug)\b/i.test(material)) mandatory.push("difficultOrUnclearBug");
-  if (/(困难|棘手|疑难).{0,12}(漏洞|故障|错误|问题|[Bb]ug)|原因(不明|不清|未知).{0,12}(漏洞|故障|错误|问题|[Bb]ug)/.test(material)) mandatory.push("difficultOrUnclearBug");
-  if (/\b(production incident|runtime incident|outage|production outage)\b/i.test(material)) mandatory.push("productionOrRuntimeIncident");
-  if (/(生产(环境)?|线上|运行时).{0,12}(事故|故障|宕机|中断)/.test(material)) mandatory.push("productionOrRuntimeIncident");
-  if (/\b(follow.?up|continue (the )?(diagnosis|investigation|fix)|reinvestigat|after (the )?(diagnosis|investigation)|same issue)\b/i.test(material)) mandatory.push("completedPriorDiagnosisAndFollowupCodex");
-  if (/(已完成|完成|上一轮|前一轮|此前).{0,12}(诊断|调查).{0,20}(继续|再次|后续|接着|跟进|修复|再查)/.test(material)) mandatory.push("completedPriorDiagnosisAndFollowupCodex");
-  if (/\b(repeated investigation|repeatedly investigating|no progress|still unresolved)\b/i.test(material)) mandatory.push("repetitiveInvestigationWithoutProgress");
-  if (/(反复|重复|多次).{0,12}(调查|排查|诊断).{0,20}(无进展|没有进展|未有进展|无实质进展|没有实质进展|仍未解决)/.test(material)) mandatory.push("repetitiveInvestigationWithoutProgress");
-  if (mandatory.length) return { state: "REQUIRES_JEV", reasonCodes: [...new Set(mandatory)] };
-  if (!proposal.goal.trim() || !proposal.scope.inScope.length || !proposal.implementationBasis.length ||
-    !input.acceptanceCriteria.length || !input.taskEvidence.length) {
+const placeholder = /^(?:approved|approved fix|done|todo|tbd|n\/a|none|unknown|same as above|the user (?:only )?approved (?:this task|it)|已批准|批准|完成|待定|暂无|无|当前任务材料|任务材料)$/i;
+function isConcrete(value: string): boolean {
+  const normalized = value.trim().replace(/[.。!?！？\s]+$/g, "").toLowerCase();
+  return normalized.length >= 4 && !placeholder.test(normalized);
+}
+function hasConcreteItems(values: string[]): boolean {
+  return values.length > 0 && values.every(isConcrete);
+}
+function hasConcreteCriteria(values: string[]): boolean {
+  return hasConcreteItems(values) && values.every((value) =>
+    !/\b(?:confirm|verify|test|check)\s+(?:that\s+)?(?:everything|it|the task)\s+(?:works|passes|is okay|is safe)\b/i.test(value) &&
+    !/(一切正常|全部正常|确认完成|验证通过即可)/.test(value));
+}
+function unsafeRequestedAction(value: string): boolean {
+  const positive = value
+    .replace(/\b(?:do not|don't|never|without|avoid|prevent|must not|should not)\b[^.;!?。！？]*/gi, "")
+    .replace(/(?:不要|不得|禁止|避免|不可以|不可).{0,16}(?:绕过|关闭|禁用)[^，。；;！？!?]*/g, "");
+  return /\b(?:bypass|disable authentication|disable authorization|ignore (?:the )?stop marker|override (?:the )?stop)\b/i.test(positive) ||
+    /(绕过|关闭|禁用).{0,8}(认证|授权|Stop|停止标记)/i.test(positive);
+}
+function assessMaterials(proposal: ExecutionProposal, input: PreflightInput): { state: PreflightState; reasonCodes: string[] } | null {
+  if (!proposal.goal.trim() || !hasConcreteItems(proposal.scope.inScope) ||
+    !isConcrete(proposal.approvedBasis.summary) || !hasConcreteItems(proposal.implementationBasis) ||
+    !hasConcreteItems(input.taskEvidence) || !hasConcreteCriteria(input.acceptanceCriteria)) {
     return { state: "NEEDS_TASK_DETAILS", reasonCodes: ["INSUFFICIENT_TASK_DETAILS"] };
   }
-  return { state: "NOT_REQUIRED", reasonCodes: ["BOUNDED_ORDINARY_TASK"] };
+  const taskMaterial = [proposal.goal, proposal.approvedBasis.summary, proposal.riskProfile ?? "", ...proposal.scope.inScope,
+    ...proposal.scope.outOfScope, ...proposal.implementationBasis, ...input.taskEvidence, ...input.acceptanceCriteria].join(" ");
+  if ([proposal.goal, proposal.approvedBasis.summary, ...proposal.scope.inScope].some(unsafeRequestedAction)) {
+    return { state: "BLOCKED_VALIDATION", reasonCodes: ["UNSAFE_AUTHORIZATION_REQUEST"] };
+  }
+  const highRisk = /\b(production|security|authorization|authentication|data integrity|irreversible|delete|deletion|deploy|deployment|external side effect|customer data)\b/i.test(taskMaterial) ||
+    /(生产|安全|授权|认证|数据完整性|不可逆|删除|部署|外部副作用|客户数据)/.test(taskMaterial) ||
+    input.productionOrRuntimeIncident === true;
+  if (highRisk) {
+    const riskText = [proposal.riskProfile ?? "", ...proposal.scope.inScope, ...proposal.implementationBasis, ...input.taskEvidence,
+      ...input.acceptanceCriteria].join(" ");
+    const explicitBoundary = /\b(read.only|limited to|only\s+(?:read|inspect|review|query|collect|compare)|permitted actions? (?:are|is|:)|allowed actions? (?:are|is|:))\b/i.test(riskText) ||
+      /(允许.{0,12}(仅|只读)|仅限|只读|限制范围|操作边界)/.test(riskText);
+    const explicitStopOrValidation = /\b(stop if|stop when|stop condition|rollback|revert|verify|validation|test|confirm|check)\b/i.test(riskText) ||
+      /(停止条件|如果.{0,8}停止|回退|回滚|验证|确认|检查|测试)/.test(riskText);
+    if (!proposal.riskProfile || !isConcrete(proposal.riskProfile) || !proposal.scope.outOfScope.length ||
+      !hasConcreteItems(proposal.scope.outOfScope) || !explicitBoundary || !explicitStopOrValidation) {
+      return { state: "NEEDS_TASK_DETAILS", reasonCodes: ["RISK_BOUNDARY_OR_STOP_CONDITION_MISSING"] };
+    }
+  }
+  const unknownCause = /\b(unknown cause|root cause unknown|cause is unknown|cause is unclear)\b/i.test(taskMaterial) ||
+    /(原因(不明|不清|未知)|根因(未知|不明|不清))/.test(taskMaterial);
+  if (unknownCause) {
+    const noCodeChange = proposal.scope.outOfScope.some((item) => /\b(?:do not|no|without)\s+(?:modify|change|write)\s+(?:(?:any|the)\s+)?(?:code|source|data|production|application|configuration|config)\b|\b(?:read.only|no code changes)\b/i.test(item) ||
+      /不修改.{0,10}(代码|数据|配置)|禁止修改.{0,10}(代码|数据|配置)|不得修改.{0,10}(代码|数据|配置)|只读/.test(item));
+    const readOnlyActions = proposal.scope.inScope.every((item) =>
+      /\b(read.only|read|inspect|review|query|collect|compare|view)\b/i.test(item) &&
+      !/\b(modify|change|write|delete|deploy|restart)\w*\b/i.test(item) &&
+      !/(修改|变更|写入|删除|部署|重启)/.test(item));
+    const boundedEvidence = input.taskEvidence.some((item) => /\b(logs?|traces?|evidence|investigat\w*|inspect\w*|reads?)\b/i.test(item) || /(日志|跟踪|证据|调查|检查|读取)/.test(item)) &&
+      input.taskEvidence.some((item) => /\b(stop|halt|until|after identifying)\b/i.test(item) || /(停止|止于|直到|确认后结束)/.test(item));
+    if (!noCodeChange || !readOnlyActions || !boundedEvidence) {
+      return { state: "NEEDS_TASK_DETAILS", reasonCodes: ["READ_ONLY_DIAGNOSTIC_BOUNDARY_MISSING"] };
+    }
+  }
+  return null;
+}
+export function assessPreflight(proposal: ExecutionProposal, input: PreflightInput): { state: PreflightState; reasonCodes: string[] } {
+  return assessMaterials(proposal, input) ?? { state: "NOT_REQUIRED", reasonCodes: ["DETERMINISTIC_PREFLIGHT_PASSED"] };
 }
 async function keyFor(id: string): Promise<Buffer> {
   const dir = folder(id); await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -124,7 +170,7 @@ export async function verifyPreflightReceipt(id: string, proposal: ExecutionProp
   if (receipt.version !== VERSION || receipt.issuer !== ISSUER || receipt.receiptId !== receiptId ||
     receipt.workspaceId !== workspaceKey(id) || receipt.executionLineId !== proposal.executionLineId ||
     receipt.proposalIdentity !== proposal.identity || receipt.materialDigest !== preflightMaterialDigest(proposal, input) ||
-    receipt.decision !== "NOT_REQUIRED" || JSON.stringify(receipt.reasonCodes) !== JSON.stringify(["BOUNDED_ORDINARY_TASK"]) ||
+    receipt.decision !== "NOT_REQUIRED" || JSON.stringify(receipt.reasonCodes) !== JSON.stringify(["DETERMINISTIC_PREFLIGHT_PASSED"]) ||
     !Number.isFinite(issued) || !Number.isFinite(expires) || expires <= issued || expires - issued > MAX_AGE_MS) {
     throw new Error("Invalid preflight receipt");
   }
