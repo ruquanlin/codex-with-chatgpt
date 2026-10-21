@@ -621,14 +621,21 @@ export function createMcpServer(ctx: McpContext): McpServer {
     {
       title: "Read historical Jev Stop status",
       description: "Check whether an existing signed historical Stop matches this proposal in the authenticated workspace. This lookup makes no filesystem changes. " + UNTRUSTED_NOTE,
-      inputSchema: { proposal: z.unknown() },
-      outputSchema: { state: z.enum(["STOPPED", "CLEAR"]) },
+      inputSchema: { proposal: z.unknown().optional(), executionLineId: z.string().optional() },
+      outputSchema: { state: z.enum(["STOPPED", "CLEAR", "UNVERIFIED"]) },
       annotations: { readOnlyHint: true },
     },
-    async ({ proposal }, extra) => {
+    async ({ proposal, executionLineId }, extra) => {
       const denied = requireScope(extra.authInfo, "workspace.read");
       if (denied) return denied;
       try {
+        if ((proposal === undefined) === (executionLineId === undefined)) {
+          throw new Error("Provide exactly one of proposal or executionLineId");
+        }
+        if (executionLineId !== undefined) {
+          if (!executionLineId.trim()) throw new Error("executionLineId must be a nonblank string");
+          return okStructured({ state: await getJevStop(workspace.id, executionLineId) ? "STOPPED" : "UNVERIFIED" });
+        }
         const allowed = new Set(["executionLineId", "goal", "scope", "approvedBasis", "implementationBasis", "riskProfile", "jevRequired", "identity"]);
         if (!proposal || typeof proposal !== "object" || Array.isArray(proposal) ||
           Object.keys(proposal).some((key) => !allowed.has(key))) throw new Error("Invalid proposal material");

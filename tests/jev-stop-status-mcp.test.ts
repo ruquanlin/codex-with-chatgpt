@@ -48,8 +48,8 @@ async function setup(scopes = ["workspace.read"]) {
   return { workspaceId: bridge.workspace.id, folder: path.join(stateDir, "jev-receipts", bridge.workspace.id.toLowerCase()) };
 }
 
-async function query(proposal: unknown) {
-  return client!.callTool({ name: "jev_stop_status", arguments: { proposal } });
+async function query(args: Record<string, unknown>) {
+  return client!.callTool({ name: "jev_stop_status", arguments: args });
 }
 
 describe("jev_stop_status MCP tool", () => {
@@ -57,23 +57,41 @@ describe("jev_stop_status MCP tool", () => {
     const { workspaceId } = await setup();
     const proposal = createExecutionProposal(input);
     await issueJevReceipt(workspaceId, proposal, { task: proposal.goal }, { available: true, decision: "stop" });
-    expect((await query(proposal)).structuredContent).toEqual({ state: "STOPPED" });
+    expect((await query({ proposal })).structuredContent).toEqual({ state: "STOPPED" });
     const renamed = createExecutionProposal({ ...input, executionLineId: "different-line" });
-    expect((await query(renamed)).structuredContent).toEqual({ state: "STOPPED" });
+    expect((await query({ proposal: renamed })).structuredContent).toEqual({ state: "STOPPED" });
     const unrelated = createExecutionProposal({ ...input, executionLineId: "unrelated-line", goal: "Fix unrelated renderer" });
-    expect((await query(unrelated)).structuredContent).toEqual({ state: "CLEAR" });
+    expect((await query({ proposal: unrelated })).structuredContent).toEqual({ state: "CLEAR" });
+  });
+
+  it("supports legacy line lookup and reports unmatched lines as UNVERIFIED", async () => {
+    const { workspaceId, folder } = await setup();
+    const proposal = createExecutionProposal(input);
+    await issueJevReceipt(workspaceId, proposal, { task: proposal.goal }, { available: true, decision: "stop" });
+    const before = fs.readdirSync(folder).sort();
+    expect((await query({ executionLineId: input.executionLineId })).structuredContent).toEqual({ state: "STOPPED" });
+    expect((await query({ executionLineId: "line-without-stop" })).structuredContent).toEqual({ state: "UNVERIFIED" });
+    expect(fs.readdirSync(folder).sort()).toEqual(before);
+  });
+
+  it("requires exactly one valid query mode", async () => {
+    await setup();
+    expect((await query({})).isError).toBe(true);
+    expect((await query({ proposal: input, executionLineId: input.executionLineId })).isError).toBe(true);
+    expect((await query({ executionLineId: "   " })).isError).toBe(true);
+    expect((await query({ executionLineId: 4 })).isError).toBe(true);
   });
 
   it("rejects malformed proposals and mismatched supplied identity", async () => {
     await setup();
-    expect((await query({ ...input, goal: "" })).isError).toBe(true);
-    expect((await query({ ...input, unexpected: true })).isError).toBe(true);
-    expect((await query({ ...input, identity: "0".repeat(64) })).isError).toBe(true);
+    expect((await query({ proposal: { ...input, goal: "" } })).isError).toBe(true);
+    expect((await query({ proposal: { ...input, unexpected: true } })).isError).toBe(true);
+    expect((await query({ proposal: { ...input, identity: "0".repeat(64) } })).isError).toBe(true);
   });
 
   it("requires workspace.read", async () => {
     await setup(["workspace.write"]);
-    const denied = await query(input);
+    const denied = await query({ executionLineId: input.executionLineId });
     expect(denied.isError).toBe(true);
     expect(JSON.stringify(denied)).toContain("INSUFFICIENT_SCOPE");
   });
@@ -85,16 +103,17 @@ describe("jev_stop_status MCP tool", () => {
     const file = path.join(folder, `stop-${(await import("node:crypto")).createHash("sha256").update(input.executionLineId).digest("hex")}.json`);
     expect(stop.receiptId).toBeTruthy();
     fs.writeFileSync(file, "{broken");
-    const result = await query(proposal);
+    const result = await query({ proposal });
     expect(result.isError).toBe(true);
     expect(result.content[0]).toMatchObject({ type: "text" });
     expect(result.content[0].text).not.toContain(stateDir);
+    expect((await query({ executionLineId: input.executionLineId })).isError).toBe(true);
   });
 
   it("returns CLEAR on a fresh workspace without creating files or issuer.key", async () => {
     const { folder } = await setup();
     const before = fs.existsSync(folder) ? fs.readdirSync(folder) : [];
-    const result = await query(input);
+    const result = await query({ proposal: input });
     expect(result.structuredContent).toEqual({ state: "CLEAR" });
     expect(fs.existsSync(folder) ? fs.readdirSync(folder) : []).toEqual(before);
     expect(fs.existsSync(path.join(folder, "issuer.key"))).toBe(false);
