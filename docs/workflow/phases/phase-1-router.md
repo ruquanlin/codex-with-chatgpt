@@ -60,9 +60,15 @@ It does not:
 
 ## 2.1 Conversation Window Management
 
-Default: **No-Trigger**. Do not advise on a new conversation window for routine work. At most once per substantive development phase transition, advise whether a new window is needed, whether to use the ChatGPT Project / C2C workspace, and whether a handoff prompt is needed. The default recommendation is to stay in the current window.
+Window management is **silent by default**. ChatGPT internally decides whether a new window is genuinely necessary. Do not routinely announce that the current window is sufficient or recommend staying in it.
 
-A substantive transition is a real lifecycle change, an independent task, or an execution-boundary change. Routine tests, reviews, reconnects, and Git activity do not qualify. Recommend a new window only when context continuity is unreliable, isolation is necessary, or the session/connectivity cannot be recovered. A window change never resets workflow gates or authorization state.
+Recommend a new window only when context continuity is unreliable, execution genuinely requires isolation, or the session / connection cannot be recovered. When recommending one, specify the Project to use and provide one concise Markdown handoff Prompt containing the confirmed workspace, current state, next task, necessary boundaries, and acceptance criteria. A window change does not reset workflow gates or authorization state.
+
+Routine tests, reviews, reconnects, and Git activity do not by themselves justify recommending a new window.
+
+## 2.2 Codex Model Recommendation
+
+For **every local Codex or Codex Cloud execution Prompt**, ChatGPT internally selects a suitable model and reasoning effort, then explicitly communicates the recommended execution environment, exact model, and reasoning effort to the user. Prefer **GPT-6 Luna + Light** when available and sufficient. Upgrade only when task complexity or concrete evidence justifies it, briefly stating the reason. Never invent model availability or claim a model was actually used without verification. Model selection adds no approval gate or workflow step.
 
 ---
 
