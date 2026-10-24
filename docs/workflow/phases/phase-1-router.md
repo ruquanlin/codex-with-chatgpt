@@ -60,7 +60,7 @@ It does not:
 
 ## 2.1 Conversation Window Management
 
-Window management is **silent by default**. ChatGPT internally decides whether a new window is genuinely necessary. Do not routinely announce that the current window is sufficient or recommend staying in it.
+Window management is **silent by default**. Whenever a task completes and moves to a new phase, ChatGPT must internally reassess the need for a new window. Reassess as well when context continuity declines or the session / connection cannot be reliably recovered. Routine Git operations, tests, and reconnects do not by themselves trigger a window change. Recommend a new window only when a change is genuinely needed. Do not routinely announce that the current window is sufficient or recommend staying in it.
 
 Recommend a new window only when context continuity is unreliable, execution genuinely requires isolation, or the session / connection cannot be recovered. When recommending one, specify the Project to use and provide one concise Markdown handoff Prompt containing the confirmed workspace, current state, next task, necessary boundaries, and acceptance criteria. A window change does not reset workflow gates or authorization state.
 
