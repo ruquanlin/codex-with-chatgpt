@@ -57,6 +57,10 @@ export function makeGitRepo(dir: string): void {
   git(dir, "commit", "-m", "initial commit");
 }
 
+export function makeGitWorktree(main: string, worktree: string): void {
+  git(main, "worktree", "add", "-b", `test-${path.basename(worktree)}`, worktree);
+}
+
 /** Point the persistent state dir at an isolated temp location. */
 export function isolateStateDir(): string {
   const dir = makeTmpDir("state");

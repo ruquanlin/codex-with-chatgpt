@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { enrollUserPrompt } from "../src/hooks/user-prompt-submit.js";
 import { writeLastEndpoint } from "../src/config/endpoint.js";
 import { appendExecutionRecord } from "../src/execution/records.js";
 import { readExecutionRecords } from "../src/execution/records.js";
 import { mergeSession, readSession, writeSession } from "../src/session/state.js";
 import { Workspace } from "../src/workspace/manager.js";
-import { cleanup, isolateStateDir, makeTmpDir } from "./helpers.js";
+import { cleanup, isolateStateDir, makeGitRepo, makeGitWorktree, makeTmpDir } from "./helpers.js";
 
 describe("C2C UserPromptSubmit hook", () => {
   it("enrolls a connected workspace and injects the matching record requirement", () => {
@@ -54,6 +56,54 @@ describe("C2C UserPromptSubmit hook", () => {
       });
     } finally {
       cleanup(root);
+      cleanup(state);
+      delete process.env.C2C_STATE_DIR;
+    }
+  });
+
+  it("enrolls a registered Git worktree under its explicitly bound workspace ID", () => {
+    const root = makeTmpDir("prompt-hook-main-git");
+    const worktree = makeTmpDir("prompt-hook-git-worktree");
+    const state = isolateStateDir();
+    try {
+      makeGitRepo(root);
+      makeGitWorktree(root, worktree);
+      const main = new Workspace(root);
+      const worktreeWorkspace = new Workspace(worktree);
+      expect(main.id).not.toBe(worktreeWorkspace.id);
+      writeLastEndpoint({ workspaceId: main.id, port: 17666, publicUrl: null, mcpUrl: null });
+      fs.mkdirSync(path.join(state, "worktree-bindings"), { recursive: true });
+      fs.writeFileSync(path.join(state, "worktree-bindings", `${worktreeWorkspace.id}.json`), JSON.stringify({ worktreeRoot: worktree, workspaceRoot: root, workspaceId: main.id }));
+
+      const result = enrollUserPrompt({ hook_event_name: "UserPromptSubmit", cwd: worktree, prompt: "verify worktree enrollment" });
+
+      expect(result).toMatchObject({ continue: true, hookSpecificOutput: { hookEventName: "UserPromptSubmit" } });
+      expect(readSession(main.id)?.checkpoint).toMatchObject({ taskId: `c2c_${main.id}`, iteration: 0 });
+      expect(readSession(worktreeWorkspace.id)).toBeNull();
+      expect(worktreeWorkspace.resolve("hello.txt").abs).toContain(worktree);
+      expect(() => worktreeWorkspace.resolve("../outside")).toThrow();
+    } finally {
+      cleanup(root);
+      cleanup(worktree);
+      cleanup(state);
+      delete process.env.C2C_STATE_DIR;
+    }
+  });
+
+  it("does not inherit a connection in an unregistered directory", () => {
+    const root = makeTmpDir("prompt-hook-unregistered-main");
+    const unrelated = makeTmpDir("prompt-hook-unregistered-child");
+    const state = isolateStateDir();
+    try {
+      makeGitRepo(root);
+      const main = new Workspace(root);
+      writeLastEndpoint({ workspaceId: main.id, port: 17666, publicUrl: null, mcpUrl: null });
+
+      expect(enrollUserPrompt({ hook_event_name: "UserPromptSubmit", cwd: unrelated, prompt: "must not enroll" })).toEqual({ continue: true, suppressOutput: true });
+      expect(readSession(main.id)).toBeNull();
+    } finally {
+      cleanup(root);
+      cleanup(unrelated);
       cleanup(state);
       delete process.env.C2C_STATE_DIR;
     }

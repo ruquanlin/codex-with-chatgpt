@@ -3,6 +3,7 @@ import { getStateDir } from "../config/paths.js";
 import { readLastEndpoint } from "../config/endpoint.js";
 import { mergeSession, readSession, writeSession, type SavedSession } from "../session/state.js";
 import { Workspace } from "../workspace/manager.js";
+import { resolveHookWorkspaceId } from "./workspace-identity.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -25,7 +26,7 @@ export type UserPromptSubmitOutput =
       };
     };
 
-function nextIteration(workspace: Workspace, session: SavedSession | null): number {
+function nextIteration(workspace: Pick<Workspace, "id">, session: SavedSession | null): number {
   let next = (session?.iteration ?? session?.checkpoint?.iteration ?? -1) + 1;
   const file = path.join(getStateDir(), "executions", `${workspace.id}.jsonl`);
   if (fs.existsSync(file)) {
@@ -47,8 +48,9 @@ export function enrollUserPrompt(input: UserPromptSubmitInput): UserPromptSubmit
   }
   try {
     const workspace = new Workspace(input.cwd);
-    const previous = readSession(workspace.id);
-    const endpoint = readLastEndpoint(workspace.id);
+    const workspaceId = resolveHookWorkspaceId(input.cwd);
+    const previous = readSession(workspaceId);
+    const endpoint = readLastEndpoint(workspaceId);
 
     // A saved chat/project binding or bridge endpoint is the durable indication that C2C is connected.
     if (!endpoint && (!previous || (!previous.url && !previous.projectUrl && !previous.conversationMode))) {
@@ -56,9 +58,9 @@ export function enrollUserPrompt(input: UserPromptSubmitInput): UserPromptSubmit
     }
 
     const active = previous?.checkpoint;
-    if (active && !hasExecutionRecord(workspace.id, active.taskId, active.iteration)) {
+    if (active && !hasExecutionRecord(workspaceId, active.taskId, active.iteration)) {
       try {
-        appendExecutionRecord(workspace.id, {
+        appendExecutionRecord(workspaceId, {
           taskId: active.taskId,
           iteration: active.iteration,
           changedFiles: 0,
@@ -80,7 +82,7 @@ export function enrollUserPrompt(input: UserPromptSubmitInput): UserPromptSubmit
             `${active.taskId} iteration ${active.iteration}. The previous checkpoint was preserved.`,
         };
       }
-      if (!hasExecutionRecord(workspace.id, active.taskId, active.iteration)) {
+      if (!hasExecutionRecord(workspaceId, active.taskId, active.iteration)) {
         return {
           decision: "block",
           reason:
@@ -90,8 +92,8 @@ export function enrollUserPrompt(input: UserPromptSubmitInput): UserPromptSubmit
       }
     }
 
-    const taskId = previous?.taskId ?? `c2c_${workspace.id.slice(0, 12)}`;
-    const iteration = nextIteration(workspace, previous);
+    const taskId = previous?.taskId ?? `c2c_${workspaceId.slice(0, 12)}`;
+    const iteration = nextIteration({ id: workspaceId }, previous);
     const saved = mergeSession(previous, {
       taskId,
       iteration,
@@ -105,7 +107,7 @@ export function enrollUserPrompt(input: UserPromptSubmitInput): UserPromptSubmit
         nextExpectedStep: "persist matching execution record before completion",
       },
     });
-    writeSession(workspace.id, saved);
+    writeSession(workspaceId, saved);
 
     return {
       continue: true,

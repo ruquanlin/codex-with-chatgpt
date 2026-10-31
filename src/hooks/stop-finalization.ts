@@ -2,6 +2,7 @@ import { appendExecutionRecord, hasExecutionRecord } from "../execution/records.
 import { saveExecutionOutput } from "../execution/output.js";
 import { readSession } from "../session/state.js";
 import { Workspace } from "../workspace/manager.js";
+import { resolveHookWorkspaceId } from "./workspace-identity.js";
 
 export interface StopHookInput {
   cwd?: unknown;
@@ -11,11 +12,11 @@ export interface StopHookInput {
 }
 
 export type StopHookOutput =
-  | { continue: false; suppressOutput: true }
+  | { continue: true; suppressOutput: true }
   | { continue: false; stopReason: string }
   | { continue: true; decision: "block"; reason: string };
 
-const allowStop = (): StopHookOutput => ({ continue: false, suppressOutput: true });
+const allowStop = (): StopHookOutput => ({ continue: true, suppressOutput: true });
 
 /**
  * Finalize the active C2C execution before allowing Codex to stop.
@@ -23,16 +24,32 @@ const allowStop = (): StopHookOutput => ({ continue: false, suppressOutput: true
 export function evaluateStopFinalization(input: StopHookInput): StopHookOutput {
   if (input.hook_event_name !== "Stop" || typeof input.cwd !== "string") return allowStop();
 
+  let workspace: Workspace;
   try {
-    const workspace = new Workspace(input.cwd);
-    const checkpoint = readSession(workspace.id)?.checkpoint;
+    workspace = new Workspace(input.cwd);
+  } catch {
+    // Invalid/non-workspace input is not evidence of a managed execution.
+    return allowStop();
+  }
+
+  let workspaceId: string;
+  try {
+    workspaceId = resolveHookWorkspaceId(workspace.root);
+  } catch {
+    const reason = "C2C worktree binding validation failed; refusing to stop.";
+    if (input.stop_hook_active === true) return { continue: false, stopReason: reason };
+    return { continue: true, decision: "block", reason };
+  }
+
+  try {
+    const checkpoint = readSession(workspaceId)?.checkpoint;
 
     // No active C2C checkpoint means this is not a C2C-managed execution.
     if (!checkpoint) return allowStop();
-    if (!hasExecutionRecord(workspace.id, checkpoint.taskId, checkpoint.iteration)) {
+    if (!hasExecutionRecord(workspaceId, checkpoint.taskId, checkpoint.iteration)) {
       try {
         const message = typeof input.last_assistant_message === "string" ? input.last_assistant_message : "";
-        const output = saveExecutionOutput(workspace.id, {
+        const output = saveExecutionOutput(workspaceId, {
           command: "c2c stop finalization",
           raw: message,
           stdout: message,
@@ -41,7 +58,7 @@ export function evaluateStopFinalization(input: StopHookInput): StopHookOutput {
           iteration: checkpoint.iteration,
           validationType: "other",
         });
-        appendExecutionRecord(workspace.id, {
+        appendExecutionRecord(workspaceId, {
           taskId: checkpoint.taskId,
           iteration: checkpoint.iteration,
           changedFiles: 0,
@@ -60,7 +77,7 @@ export function evaluateStopFinalization(input: StopHookInput): StopHookOutput {
         return { continue: true, decision: "block", reason };
       }
     }
-    if (hasExecutionRecord(workspace.id, checkpoint.taskId, checkpoint.iteration)) return allowStop();
+    if (hasExecutionRecord(workspaceId, checkpoint.taskId, checkpoint.iteration)) return allowStop();
 
     // Codex sets this after a Stop hook has already blocked once in the turn.
     // Halt the turn instead of blocking again: this fails closed without
