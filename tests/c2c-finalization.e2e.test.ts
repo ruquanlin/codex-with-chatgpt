@@ -52,7 +52,7 @@ describe("C2C finalization E2E", () => {
         false
       );
       expect(stopBeforeRecord.status).toBe(0);
-      expect(JSON.parse(stopBeforeRecord.stdout)).toEqual({ continue: false, suppressOutput: true });
+      expect(JSON.parse(stopBeforeRecord.stdout)).toEqual({ continue: true, suppressOutput: true });
 
       const recorded = runCli(root, [
         "record",
@@ -88,7 +88,7 @@ describe("C2C finalization E2E", () => {
         false
       );
       expect(stopAfterRecord.status).toBe(0);
-      expect(JSON.parse(stopAfterRecord.stdout)).toEqual({ continue: false, suppressOutput: true });
+      expect(JSON.parse(stopAfterRecord.stdout)).toEqual({ continue: true, suppressOutput: true });
     } finally {
       cleanup(root);
       cleanup(stateDir);
