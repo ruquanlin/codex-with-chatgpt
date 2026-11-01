@@ -614,13 +614,15 @@ brief, re-read code through the connector, and resume at NEXT_EXPECTED_STEP.
 
 Be substantive: why, which file, what to test. No empty one-liners and
 no 40-step epics. Use C2C control messages for delegated protocol states.
-For delegated Codex Cloud work in a GitHub repository, request a PR with a
-short description of changes, validation results, and blockers or remaining
-risks. Ask Codex Cloud to return its URL, then explicitly pass it to ChatGPT
-in the C2C control handoff. Use that URL to review the PR Diff and checks
-through the GitHub connector, not a pasted Codex report. Do not assume
-automatic PR notification or merge automatically. Keep the matching C2C
-execution record requirement.
+For delegated Codex Cloud work in a GitHub repository, request a PR for
+code changes with a short description of changes, validation results, and
+blockers or remaining risks. When the user reports completion, search GitHub
+using the known repository, task ID, and branch (if known). For exactly one
+verified matching PR, review its Diff and checks through the GitHub connector,
+not a pasted Codex report. Only request the PR URL or minimal identifiers if
+no unique match is found. Do not assume automatic PR notification or merge
+automatically. Read-only work with no changes requires no empty PR. Keep the
+matching C2C execution record requirement.
 When direct execution is selected, do not emit a Codex prompt unless delegation becomes necessary. Direct execution does not itself authorize source-code changes: C2C mutation tools such as `apply_patch` may only be used when the active global workflow confirms explicit user authorization for direct workspace mutation. Without it, keep connector work read-only and route required code changes to the selected execution owner.
 ```
 

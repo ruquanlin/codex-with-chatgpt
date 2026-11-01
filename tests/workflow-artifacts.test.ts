@@ -54,18 +54,21 @@ describe("C2C workflow artifact execution-reporting contract", () => {
     );
   });
 
-  it("requires PR delivery and connector review for delegated Codex Cloud work", () => {
+  it("looks up delegated Codex Cloud PRs before requesting a URL", () => {
     const protocol = readArtifact("docs/protocol.md");
     const skill = readArtifact("skill/SKILL.md");
 
     for (const handoff of [protocol, skill]) {
       expect(handoff).toContain("For delegated Codex Cloud work in a GitHub repository, request a PR");
-      expect(handoff).toContain("short description of changes, validation results, and blockers or remaining");
-      expect(handoff).toContain("Ask Codex Cloud to return its URL, then explicitly pass it to ChatGPT");
-      expect(handoff).toContain("in the C2C control handoff. Use that URL to review the PR Diff and checks");
-      expect(handoff).toContain("through the GitHub connector, not a pasted Codex report");
-      expect(handoff).toContain("Do not assume\nautomatic PR notification or merge automatically");
-      expect(handoff).toContain("Keep the matching C2C\nexecution record requirement");
+      expect(handoff).toContain("short description of changes, validation results, and");
+      expect(handoff).toContain("When the user reports completion, search GitHub");
+      expect(handoff).toContain("known repository, task ID, and branch (if known)");
+      expect(handoff).toContain("For exactly one\nverified matching PR, review its Diff and checks through the GitHub connector");
+      expect(handoff).toContain("Only request the PR URL or minimal identifiers if\nno unique match is found");
+      expect(handoff).toContain("not a pasted Codex report");
+      expect(handoff).toContain("Do not assume automatic PR notification or merge\nautomatically");
+      expect(handoff).toContain("Read-only work with no changes requires no empty PR");
+      expect(handoff).toContain("matching C2C execution record requirement");
       expect(handoff).toContain("For local workspace tools, use ONLY that connector. Use the GitHub connector");
     }
   });
